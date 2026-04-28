@@ -1,0 +1,16 @@
+uvicorn
+fastapi
+pydantic
+pydantic-settings
+sqlalchemy
+openai
+python-dotenv
+pytest
+sentence-transformers
+qdrant-client
+PyPDF2
+PyMuPDF
+python-docx
+python-multipart
+numpy
+
