@@ -21,10 +21,6 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    openai_vision_model: str = os.getenv(
-        "OPENAI_VISION_MODEL",
-        os.getenv("OPENAI_MODEL", "gpt-4o")
-    )
     
     # Qdrant
     qdrant_url: str = os.getenv("QDRANT_URL", "http://localhost:6333")
@@ -42,12 +38,6 @@ class Settings(BaseSettings):
     top_k_documents: int = 5
     chunk_size: int = 512
     chunk_overlap: int = 50
-    enable_pdf_drawing_analysis: bool = os.getenv(
-        "ENABLE_PDF_DRAWING_ANALYSIS",
-        "true"
-    ).lower() in {"1", "true", "yes", "on"}
-    pdf_render_dpi: int = int(os.getenv("PDF_RENDER_DPI", "200"))
-    max_page_image_bytes: int = int(os.getenv("MAX_PAGE_IMAGE_BYTES", str(8 * 1024 * 1024)))
     hybrid_candidate_multiplier: int = int(os.getenv("HYBRID_CANDIDATE_MULTIPLIER", "4"))
     keyword_scan_limit: int = int(os.getenv("KEYWORD_SCAN_LIMIT", "500"))
     

@@ -9,6 +9,7 @@ from app.database import get_db
 from app.models import ChatHistory
 from app.schemas import ChatRequest, ChatResponse, ChatHistoryResponse
 from app.services.rag_service import get_rag_service
+from app.utils.scopes import is_valid_scope_value, normalize_scope_value
 import json
 import logging
 
@@ -37,20 +38,20 @@ async def chat(
     Raises:
         HTTPException: For various validation errors
     """
-    user_id = chat_request.user_id
-    project_id = chat_request.project_id
+    user_id = normalize_scope_value(chat_request.user_id)
+    project_id = normalize_scope_value(chat_request.project_id)
     
     # Validate input
-    if user_id <= 0:
+    if not is_valid_scope_value(user_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="user_id must be a positive integer"
+            detail="user_id is required"
         )
     
-    if project_id <= 0:
+    if not is_valid_scope_value(project_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="project_id must be a positive integer"
+            detail="project_id is required"
         )
     
     if not chat_request.message or len(chat_request.message.strip()) == 0:
@@ -115,8 +116,8 @@ async def chat(
 
 @router.get("/history", response_model=ChatHistoryResponse)
 async def get_chat_history(
-    user_id: int,
-    project_id: int,
+    user_id: str,
+    project_id: str,
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db)
@@ -135,16 +136,19 @@ async def get_chat_history(
         Chat history with total count and messages
     
     """
-    if user_id <= 0:
+    user_id = normalize_scope_value(user_id)
+    project_id = normalize_scope_value(project_id)
+
+    if not is_valid_scope_value(user_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="user_id must be a positive integer"
+            detail="user_id is required"
         )
     
-    if project_id <= 0:
+    if not is_valid_scope_value(project_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="project_id must be a positive integer"
+            detail="project_id is required"
         )
     
     # Validate pagination
@@ -191,8 +195,8 @@ async def get_chat_history(
 
 @router.delete("/history", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_chat_history(
-    user_id: int,
-    project_id: int,
+    user_id: str,
+    project_id: str,
     db: Session = Depends(get_db)
 ) -> None:
     """
@@ -204,16 +208,19 @@ async def clear_chat_history(
         db: Database session
     
     """
-    if user_id <= 0:
+    user_id = normalize_scope_value(user_id)
+    project_id = normalize_scope_value(project_id)
+
+    if not is_valid_scope_value(user_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="user_id must be a positive integer"
+            detail="user_id is required"
         )
     
-    if project_id <= 0:
+    if not is_valid_scope_value(project_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="project_id must be a positive integer"
+            detail="project_id is required"
         )
     
     # Delete all chat history for this project

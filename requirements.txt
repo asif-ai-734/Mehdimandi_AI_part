@@ -9,7 +9,6 @@ pytest
 sentence-transformers
 qdrant-client
 PyPDF2
-PyMuPDF
 python-docx
 python-multipart
 numpy

@@ -9,9 +9,9 @@ from fastapi.responses import JSONResponse
 from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
 from app.config import settings
-from app.database import engine
+from app.database import engine, ensure_database_schema
 from app.models import Base
-from app.routes import documents, chat
+from app.routes import documents, chat, analysis
 from app.services.embeddings import get_embeddings_service
 from app.services.qdrant_service import get_qdrant_service
 import logging
@@ -27,6 +27,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up RAG API...")
 
     Base.metadata.create_all(bind=engine)
+    ensure_database_schema()
     logger.info("Database tables initialized")
 
     try:
@@ -71,6 +72,7 @@ app.add_middleware(
 
 app.include_router(documents.router)
 app.include_router(chat.router)
+app.include_router(analysis.router)
 
 
 def custom_openapi():

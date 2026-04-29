@@ -5,12 +5,12 @@ Coordinates file extraction, chunking, embedding, and retrieval.
 
 import math
 import re
+from dataclasses import dataclass
 from typing import List, Dict, Any, Tuple
 from sqlalchemy.orm import Session
 from app.models import Document, ChatHistory
 from app.services.file_extractor import extract_text
 from app.services.chunker import split_text_into_chunks
-from app.services.drawing_processor import DrawingChunk, DrawingPdfProcessor
 from app.services.embeddings import get_embeddings_service
 from app.services.qdrant_service import get_qdrant_service
 from app.services.openai_service import get_openai_service
@@ -30,6 +30,14 @@ STOPWORDS = {
 }
 
 
+@dataclass
+class DocumentChunk:
+    """Text plus metadata ready for embedding."""
+
+    text: str
+    metadata: Dict[str, Any]
+
+
 class RAGService:
     """Orchestration service for the RAG system."""
     
@@ -46,8 +54,10 @@ class RAGService:
         file_path: str,
         file_type: str,
         document_id: int,
-        user_id: int,
-        project_id: int,
+        user_id: str,
+        project_id: str,
+        project_name: str,
+        project_address: str,
         filename: str,
         db: Session
     ) -> Tuple[int, str]:
@@ -67,26 +77,6 @@ class RAGService:
             Tuple of (total_chunks, error_message or empty string)
         """
         try:
-            if file_type.lower().strip(".") == "pdf" and settings.enable_pdf_drawing_analysis:
-                processor = DrawingPdfProcessor(self.openai_service)
-                chunks = processor.process_pdf(
-                    file_path=file_path,
-                    document_id=document_id,
-                    filename=filename,
-                    project_id=project_id,
-                    user_id=user_id,
-                )
-                if not chunks:
-                    return 0, "PDF could not be split into analyzable pages"
-                return self._embed_and_store_chunks(
-                    chunks=chunks,
-                    document_id=document_id,
-                    user_id=user_id,
-                    project_id=project_id,
-                    filename=filename,
-                    db=db,
-                )
-
             # Extract text
             text = extract_text(file_path, file_type)
             if not text or len(text.strip()) == 0:
@@ -103,11 +93,13 @@ class RAGService:
                 return 0, "Text could not be split into chunks"
 
             text_chunks = [
-                DrawingChunk(
+                DocumentChunk(
                     text=chunk,
                     metadata={
                         "chunk_type": "raw_text",
                         "source_text_ref": filename,
+                        "project_name": project_name,
+                        "project_address": project_address,
                         "entities": [],
                     },
                 )
@@ -118,6 +110,8 @@ class RAGService:
                 document_id=document_id,
                 user_id=user_id,
                 project_id=project_id,
+                project_name=project_name,
+                project_address=project_address,
                 filename=filename,
                 db=db,
             )
@@ -127,10 +121,12 @@ class RAGService:
 
     def _embed_and_store_chunks(
         self,
-        chunks: List[DrawingChunk],
+        chunks: List[DocumentChunk],
         document_id: int,
-        user_id: int,
-        project_id: int,
+        user_id: str,
+        project_id: str,
+        project_name: str,
+        project_address: str,
         filename: str,
         db: Session,
     ) -> Tuple[int, str]:
@@ -150,6 +146,8 @@ class RAGService:
                 {
                     "user_id": user_id,
                     "project_id": project_id,
+                    "project_name": project_name,
+                    "project_address": project_address,
                     "document_id": document_id,
                     "filename": filename,
                     "chunk_index": chunk_index,
@@ -171,8 +169,8 @@ class RAGService:
     def retrieve_context(
         self,
         query: str,
-        user_id: int,
-        project_id: int,
+        user_id: str,
+        project_id: str,
         top_k: int = None,
         db: Session = None
     ) -> Tuple[str, List[str]]:
@@ -380,6 +378,8 @@ class RAGService:
         fields = [
             payload.get("text", ""),
             payload.get("filename", ""),
+            payload.get("project_name", ""),
+            payload.get("project_address", ""),
             payload.get("sheet", ""),
             payload.get("chunk_type", ""),
             " ".join(str(entity) for entity in payload.get("entities", [])),
@@ -389,6 +389,10 @@ class RAGService:
     @staticmethod
     def _format_source(payload: Dict[str, Any], index: int) -> str:
         parts = [f"S{index}: {payload.get('filename', 'unknown')}"]
+        if payload.get("project_name"):
+            parts.append(f"project {payload['project_name']}")
+        if payload.get("project_address"):
+            parts.append(f"address {payload['project_address']}")
         if payload.get("sheet"):
             parts.append(f"sheet {payload['sheet']}")
         if payload.get("page"):
@@ -397,15 +401,13 @@ class RAGService:
             parts.append(payload["chunk_type"])
         if payload.get("source_text_ref"):
             parts.append(f"text {payload['source_text_ref']}")
-        if payload.get("source_image"):
-            parts.append(f"image {payload['source_image']}")
         return " | ".join(parts)
     
     def generate_chat_response(
         self,
         query: str,
-        user_id: int,
-        project_id: int,
+        user_id: str,
+        project_id: str,
         db: Session
     ) -> Tuple[str, List[str]]:
         """
@@ -449,8 +451,8 @@ class RAGService:
     
     def save_chat_history(
         self,
-        user_id: int,
-        project_id: int,
+        user_id: str,
+        project_id: str,
         user_message: str,
         assistant_response: str,
         sources: List[str],

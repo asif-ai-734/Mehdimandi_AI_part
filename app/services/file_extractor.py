@@ -30,7 +30,7 @@ def extract_text_from_pdf(file_path: str) -> str:
             pdf_reader = PyPDF2.PdfReader(pdf_file)
             for page_num in range(len(pdf_reader.pages)):
                 page = pdf_reader.pages[page_num]
-                text.append(page.extract_text())
+                text.append(page.extract_text() or "")
     except Exception as e:
         raise ValueError(f"Error extracting text from PDF: {str(e)}")
     

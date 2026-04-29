@@ -14,6 +14,7 @@ from app.models import Document
 from app.schemas import DocumentResponse, DocumentUploadResponse
 from app.services.file_extractor import validate_file, get_file_type
 from app.services.rag_service import get_rag_service
+from app.utils.scopes import is_valid_scope_value, normalize_scope_value
 from app.config import settings
 import logging
 
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
 
 
-def save_uploaded_file(file: UploadFile, project_id: int, user_id: int) -> str:
+def save_uploaded_file(file: UploadFile, project_id: str, user_id: str) -> str:
     """
     Save uploaded file to disk.
 
@@ -59,8 +60,10 @@ def save_uploaded_file(file: UploadFile, project_id: int, user_id: int) -> str:
 
 @router.post("/upload", response_model=List[DocumentUploadResponse])
 async def upload_documents(
-    user_id: int = Form(...),
-    project_id: int = Form(...),
+    user_id: str = Form(...),
+    project_id: str = Form(...),
+    project_name: str = Form(""),
+    project_address: str = Form(""),
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
 ) -> List[DocumentUploadResponse]:
@@ -88,16 +91,21 @@ async def upload_documents(
             detail="No files provided"
         )
 
-    if user_id <= 0:
+    user_id = normalize_scope_value(user_id)
+    project_id = normalize_scope_value(project_id)
+    project_name = (project_name or "").strip()
+    project_address = (project_address or "").strip()
+
+    if not is_valid_scope_value(user_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="user_id must be a positive integer"
+            detail="user_id is required"
         )
 
-    if project_id <= 0:
+    if not is_valid_scope_value(project_id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="project_id must be a positive integer"
+            detail="project_id is required"
         )
 
     responses = []
@@ -110,6 +118,8 @@ async def upload_documents(
                     document_id=0,
                     filename="unknown",
                     file_type="",
+                    project_name=project_name,
+                    project_address=project_address,
                     total_chunks=0,
                     status="error",
                     message="Invalid filename"
@@ -128,6 +138,8 @@ async def upload_documents(
                     document_id=0,
                     filename=file.filename,
                     file_type=file_type or "",
+                    project_name=project_name,
+                    project_address=project_address,
                     total_chunks=0,
                     status="error",
                     message=validation_message
@@ -141,6 +153,8 @@ async def upload_documents(
                     document_id=0,
                     filename=file.filename,
                     file_type=file_type,
+                    project_name=project_name,
+                    project_address=project_address,
                     total_chunks=0,
                     status="error",
                     message=e.detail
@@ -153,6 +167,8 @@ async def upload_documents(
                 file_type=file_type,
                 project_id=project_id,
                 user_id=user_id,
+                project_name=project_name,
+                project_address=project_address,
                 total_chunks=0
             )
             db.add(db_document)
@@ -165,6 +181,8 @@ async def upload_documents(
                 document_id=db_document.id,
                 user_id=user_id,
                 project_id=project_id,
+                project_name=project_name,
+                project_address=project_address,
                 filename=file.filename,
                 db=db
             )
@@ -174,6 +192,8 @@ async def upload_documents(
                     document_id=db_document.id,
                     filename=file.filename,
                     file_type=file_type,
+                    project_name=project_name,
+                    project_address=project_address,
                     total_chunks=0,
                     status="error",
                     message=error
@@ -184,6 +204,8 @@ async def upload_documents(
                 document_id=db_document.id,
                 filename=file.filename,
                 file_type=file_type,
+                project_name=project_name,
+                project_address=project_address,
                 total_chunks=total_chunks,
                 status="success",
                 message="Document processed successfully"
@@ -195,6 +217,8 @@ async def upload_documents(
                 document_id=0,
                 filename=file.filename,
                 file_type=get_file_type(file.filename) or "",
+                project_name=project_name,
+                project_address=project_address,
                 total_chunks=0,
                 status="error",
                 message=f"Error uploading file: {str(e)}"
@@ -205,8 +229,8 @@ async def upload_documents(
 
 @router.get("", response_model=List[DocumentResponse])
 async def get_documents(
-    user_id: int,
-    project_id: int,
+    user_id: str,
+    project_id: str,
     db: Session = Depends(get_db)
 ) -> List[DocumentResponse]:
     """
@@ -220,6 +244,21 @@ async def get_documents(
     Returns:
         List of documents
     """
+    user_id = normalize_scope_value(user_id)
+    project_id = normalize_scope_value(project_id)
+
+    if not is_valid_scope_value(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="user_id is required"
+        )
+
+    if not is_valid_scope_value(project_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="project_id is required"
+        )
+
     documents = db.query(Document).filter(
         Document.project_id == project_id,
         Document.user_id == user_id
@@ -231,8 +270,8 @@ async def get_documents(
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(
     document_id: int,
-    user_id: int,
-    project_id: int,
+    user_id: str,
+    project_id: str,
     db: Session = Depends(get_db)
 ) -> None:
     """
@@ -247,6 +286,21 @@ async def delete_document(
     Raises:
         HTTPException: For various validation errors
     """
+    user_id = normalize_scope_value(user_id)
+    project_id = normalize_scope_value(project_id)
+
+    if not is_valid_scope_value(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="user_id is required"
+        )
+
+    if not is_valid_scope_value(project_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="project_id is required"
+        )
+
     document = db.query(Document).filter(
         Document.id == document_id,
         Document.project_id == project_id,

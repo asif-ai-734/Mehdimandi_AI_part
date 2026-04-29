@@ -116,25 +116,41 @@ class QdrantService:
         return point_ids
 
     @staticmethod
-    def _scope_filter(user_id: int, project_id: int) -> Filter:
+    def _field_scope_condition(key: str, value: str) -> Filter | FieldCondition:
+        """Match string scope values, while tolerating older numeric payloads."""
+        string_value = str(value)
+        if string_value.isdigit():
+            return Filter(
+                should=[
+                    FieldCondition(
+                        key=key,
+                        match=MatchValue(value=string_value)
+                    ),
+                    FieldCondition(
+                        key=key,
+                        match=MatchValue(value=int(string_value))
+                    )
+                ]
+            )
+        return FieldCondition(
+            key=key,
+            match=MatchValue(value=string_value)
+        )
+
+    @staticmethod
+    def _scope_filter(user_id: str, project_id: str) -> Filter:
         return Filter(
             must=[
-                FieldCondition(
-                    key="user_id",
-                    match=MatchValue(value=user_id)
-                ),
-                FieldCondition(
-                    key="project_id",
-                    match=MatchValue(value=project_id)
-                )
+                QdrantService._field_scope_condition("user_id", user_id),
+                QdrantService._field_scope_condition("project_id", project_id)
             ]
         )
     
     def search(
         self,
         query_embedding: List[float],
-        user_id: int,
-        project_id: int,
+        user_id: str,
+        project_id: str,
         top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """
@@ -185,8 +201,8 @@ class QdrantService:
 
     def scroll_project_payloads(
         self,
-        user_id: int,
-        project_id: int,
+        user_id: str,
+        project_id: str,
         limit: int = 500
     ) -> List[Dict[str, Any]]:
         """
@@ -212,7 +228,7 @@ class QdrantService:
             for point in points
         ]
     
-    def delete_by_document(self, document_id: int, user_id: int, project_id: int) -> None:
+    def delete_by_document(self, document_id: int, user_id: str, project_id: str) -> None:
         """
         Delete all vectors associated with a document.
         
@@ -224,14 +240,8 @@ class QdrantService:
         # Create filter
         filter_condition = Filter(
             must=[
-                FieldCondition(
-                    key="user_id",
-                    match=MatchValue(value=user_id)
-                ),
-                FieldCondition(
-                    key="project_id",
-                    match=MatchValue(value=project_id)
-                ),
+                self._field_scope_condition("user_id", user_id),
+                self._field_scope_condition("project_id", project_id),
                 FieldCondition(
                     key="document_id",
                     match=MatchValue(value=document_id)
