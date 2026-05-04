@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from app.config import settings
 from app.database import engine, ensure_database_schema
 from app.models import Base
-from app.routes import documents, chat, analysis
+from app.routes import documents, chat, summary
 from app.services.embeddings import get_embeddings_service
 from app.services.qdrant_service import get_qdrant_service
 import logging
@@ -72,7 +72,7 @@ app.add_middleware(
 
 app.include_router(documents.router)
 app.include_router(chat.router)
-app.include_router(analysis.router)
+app.include_router(summary.router)
 
 
 def custom_openapi():
@@ -103,8 +103,10 @@ def custom_openapi():
                 schema = openapi_schema["components"]["schemas"].get(schema_name, {})
                 properties = schema.get("properties", {})
 
-                if "files" in properties:
-                    properties["files"] = {
+                for upload_field in ("files", "addendum"):
+                    if upload_field not in properties:
+                        continue
+                    properties[upload_field] = {
                         "type": "array",
                         "items": {
                             "type": "string",

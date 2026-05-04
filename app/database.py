@@ -42,6 +42,12 @@ def ensure_database_schema() -> None:
         statements.append("ALTER TABLE documents ADD COLUMN project_name VARCHAR(255) NOT NULL DEFAULT ''")
     if "project_address" not in existing_columns:
         statements.append("ALTER TABLE documents ADD COLUMN project_address VARCHAR(500) NOT NULL DEFAULT ''")
+    if "source_type" not in existing_columns:
+        statements.append("ALTER TABLE documents ADD COLUMN source_type VARCHAR(20) NOT NULL DEFAULT 'document'")
+    if "divisions" not in existing_columns:
+        statements.append("ALTER TABLE documents ADD COLUMN divisions TEXT NOT NULL DEFAULT '[]'")
+    if "instructions" not in existing_columns:
+        statements.append("ALTER TABLE documents ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
 
     if not statements:
         return

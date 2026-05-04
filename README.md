@@ -4,7 +4,7 @@ A simple user/project-scoped Retrieval-Augmented Generation backend. There is no
 
 ## Features
 
-- Upload multiple PDF, DOCX, or TXT files in one request
+- Upload multiple PDF, DOCX, or TXT files in one request, with optional addendum files
 - Extract text from PDF, DOCX, and TXT files, then chunk, embed, and store document chunks in Qdrant
 - Hybrid retrieval combines semantic vectors, BM25 keyword scoring, and exact ID boosts for references like `AR-402`, `3.23`, `W126`, and `D101`
 - Retrieve knowledge by `user_id` and `project_id`
@@ -75,12 +75,16 @@ user_id=user-1
 project_id=project-10
 project_name=Cedar Ridge Exterior
 project_address=225 Confederation Drive, Toronto
+divisions=["06", "08", "09"]
+instructions=Focus on material costs for windows and doors. Exclude painting work.
 files=@document1.pdf
 files=@document2.docx
 files=@notes.txt
+addendum=@addendum-01.pdf
+addendum=@addendum-02.docx
 ```
 
-The upload endpoint processes documents synchronously. Files are text-extracted, split into chunks, embedded, and stored in Qdrant for that `user_id` and `project_id`. `project_name` and `project_address` are stored with the document and vector metadata so later chat and analysis can use the same project context.
+The upload endpoint processes documents synchronously. Files are text-extracted, split into chunks, embedded, and stored in Qdrant for that `user_id` and `project_id`. `project_name`, `project_address`, `divisions`, `instructions`, and `source_type` (`document` or `addendum`) are stored with the document metadata so later chat and analysis can use the same project context. The analysis summary includes the original documents and addenda together, and also returns an addenda summary card when supported by retrieved context.
 
 ### List Documents
 
@@ -114,21 +118,39 @@ GET /chat/history?user_id=user-1&project_id=project-10&limit=50&offset=0
 DELETE /chat/history?user_id=user-1&project_id=project-10
 ```
 
-### Tender Analysis
+### Summary
 
 ```http
-POST /analysis/tender
-Content-Type: application/json
-
-{
-  "user_id": "user-1",
-  "project_id": "project-10",
-  "divisions": ["06", "08", "09"],
-  "instructions": "Focus on material costs for windows and doors. Exclude painting work."
-}
+GET /summary?user_id=user-1&project_id=project-10
 ```
 
-The analysis endpoint uses the existing RAG index for the uploaded project documents and returns a structured preview with metrics, scope, risks, pricing impacts, selected divisions, and sources.
+The summary route only accepts `user_id` and `project_id`. It uses `divisions` and `instructions` saved during document upload for the same project.
+
+The summary endpoint uses the existing RAG index for the uploaded project documents and addenda. `total_items` is the uploaded file count for the project.
+
+Response shape:
+
+```json
+{
+  "estimated_value": 485000,
+  "duration_weeks": 14,
+  "labor_hours": 2840,
+  "total_items": 42,
+  "key_highlights": [
+    {
+      "title": "Scope Summary",
+      "description": "Summary text.",
+      "type": "scope"
+    }
+  ],
+  "selected_divisions": [
+    {
+      "code": "01",
+      "name": "General Requirements"
+    }
+  ]
+}
+```
 
 ## Configuration
 

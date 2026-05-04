@@ -56,6 +56,10 @@ CSI_DIVISIONS = {
 TENDER_ANALYSIS_SYSTEM_PROMPT = """You are an expert construction estimator.
 Analyze tender documents using only the provided retrieved project context.
 Focus on the selected CSI divisions and estimator instructions.
+The context can include original tender documents and addendum files. Addendum
+chunks are marked with source type "addendum" in the source label when known.
+Summarize the complete project context, including addendum revisions, in the
+executive summary.
 If estimated value, duration, labor hour count, quantities, or pricing impacts are not explicitly supported by the context, use "Not found" or an empty list.
 You may infer complexity and risk_score from documented risks, coordination requirements, schedule constraints, warranties, bonds, liquidated damages, site constraints, and administrative burden.
 Do not invent project facts. Keep wording concise and useful for an estimator.
@@ -92,6 +96,11 @@ Required schema:
       "title": "Pricing Impacts",
       "items": [],
       "badge": "0 cost factors identified"
+    },
+    "addenda_summary": {
+      "title": "Addenda Summary",
+      "content": "No supported addendum changes found.",
+      "badge": "0 addenda changes identified"
     }
   }
 }"""
@@ -162,11 +171,13 @@ def build_analysis_queries(selected_divisions: List[SelectedDivision], instructi
     base_terms = (
         "scope quantities exclusions alternates allowances warranties bonds insurance "
         "liquidated damages schedule duration labor hours risk pricing impacts "
-        "coordination requirements submittals closeout site access temporary facilities"
+        "coordination requirements submittals closeout site access temporary facilities "
+        "addendum addenda bulletin revision clarification changes"
     )
     queries = [
         " ".join(["Tender estimating analysis", division_terms, instructions, base_terms]).strip(),
         " ".join(["project requirements pricing risks schedule contract conditions", instructions]).strip(),
+        " ".join(["addendum addenda revisions bulletins clarifications changed scope pricing schedule", instructions]).strip(),
     ]
     for division in selected_divisions:
         queries.append(
@@ -330,6 +341,15 @@ def build_keyword_terms(selected_divisions: List[SelectedDivision], instructions
         "completion",
         "site access",
         "cash allowance",
+        "addendum",
+        "addenda",
+        "bulletin",
+        "revision",
+        "revisions",
+        "change",
+        "changes",
+        "clarification",
+        "clarifications",
     ]
     for division in selected_divisions:
         terms.extend(
@@ -369,12 +389,15 @@ def top_keyword_candidates(
                 stringify(payload.get("text")),
                 stringify(payload.get("filename")),
                 stringify(payload.get("source_text_ref")),
+                stringify(payload.get("source_type")),
             ]
         ).lower()
         if not haystack:
             continue
 
         score = 0
+        if stringify(payload.get("source_type")).lower() == "addendum":
+            score += 8
         for term in terms:
             if term and term in haystack:
                 score += 4 if " " in term or term.isdigit() else 1
@@ -411,6 +434,8 @@ def normalize_dedupe_key(text: str) -> str:
 
 def format_payload_source(payload: Dict[str, Any]) -> str:
     parts = [stringify(payload.get("filename")) or "unknown"]
+    if payload.get("source_type"):
+        parts.append(stringify(payload.get("source_type")))
     if payload.get("project_name"):
         parts.append(f"project {stringify(payload.get('project_name'))}")
     if payload.get("project_address"):
@@ -520,6 +545,12 @@ def normalize_preview(value: Any) -> TenderAnalysisPreview:
         scope_of_work=normalize_scope_card(data.get("scope_of_work")),
         risk_assessment=normalize_risk_card(data.get("risk_assessment")),
         pricing_impacts=normalize_pricing_card(data.get("pricing_impacts")),
+        addenda_summary=normalize_summary_card(
+            data.get("addenda_summary"),
+            "Addenda Summary",
+            "No addendum changes found in the retrieved documents.",
+            "0 addenda changes identified",
+        ),
     )
 
 

@@ -59,7 +59,8 @@ class RAGService:
         project_name: str,
         project_address: str,
         filename: str,
-        db: Session
+        db: Session,
+        source_type: str = "document",
     ) -> Tuple[int, str]:
         """
         Process a single document: extract text, chunk, embed, and store.
@@ -98,6 +99,7 @@ class RAGService:
                     metadata={
                         "chunk_type": "raw_text",
                         "source_text_ref": filename,
+                        "source_type": source_type,
                         "project_name": project_name,
                         "project_address": project_address,
                         "entities": [],
@@ -113,6 +115,7 @@ class RAGService:
                 project_name=project_name,
                 project_address=project_address,
                 filename=filename,
+                source_type=source_type,
                 db=db,
             )
         
@@ -128,6 +131,7 @@ class RAGService:
         project_name: str,
         project_address: str,
         filename: str,
+        source_type: str,
         db: Session,
     ) -> Tuple[int, str]:
         """Embed chunks, store payload metadata, and update the document row."""
@@ -150,6 +154,7 @@ class RAGService:
                     "project_address": project_address,
                     "document_id": document_id,
                     "filename": filename,
+                    "source_type": source_type,
                     "chunk_index": chunk_index,
                     "text": chunk.text,
                 }
@@ -378,6 +383,7 @@ class RAGService:
         fields = [
             payload.get("text", ""),
             payload.get("filename", ""),
+            payload.get("source_type", ""),
             payload.get("project_name", ""),
             payload.get("project_address", ""),
             payload.get("sheet", ""),
@@ -389,6 +395,8 @@ class RAGService:
     @staticmethod
     def _format_source(payload: Dict[str, Any], index: int) -> str:
         parts = [f"S{index}: {payload.get('filename', 'unknown')}"]
+        if payload.get("source_type"):
+            parts.append(payload["source_type"])
         if payload.get("project_name"):
             parts.append(f"project {payload['project_name']}")
         if payload.get("project_address"):

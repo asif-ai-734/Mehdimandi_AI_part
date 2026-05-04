@@ -5,7 +5,9 @@ Pydantic schemas for request/response validation.
 from datetime import datetime
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.utils.analysis_inputs import normalize_divisions
 
 
 class DocumentResponse(BaseModel):
@@ -15,12 +17,20 @@ class DocumentResponse(BaseModel):
     id: int
     filename: str
     file_type: str
+    source_type: str = "document"
     user_id: str
     project_id: str
     project_name: str = ""
     project_address: str = ""
+    divisions: List[str] = Field(default_factory=list)
+    instructions: str = ""
     total_chunks: int
     created_at: datetime
+
+    @field_validator("divisions", mode="before")
+    @classmethod
+    def normalize_document_divisions(cls, value: Any) -> List[str]:
+        return normalize_divisions(value)
 
 
 class DocumentUploadResponse(BaseModel):
@@ -30,11 +40,19 @@ class DocumentUploadResponse(BaseModel):
     document_id: int
     filename: str
     file_type: str
+    source_type: str = "document"
     project_name: str = ""
     project_address: str = ""
+    divisions: List[str] = Field(default_factory=list)
+    instructions: str = ""
     total_chunks: int
     status: str
     message: Optional[str] = None
+
+    @field_validator("divisions", mode="before")
+    @classmethod
+    def normalize_upload_divisions(cls, value: Any) -> List[str]:
+        return normalize_divisions(value)
 
 
 class ChatRequest(BaseModel):
@@ -73,6 +91,11 @@ class TenderAnalysisRequest(BaseModel):
     project_id: str
     divisions: List[str] = Field(default_factory=list)
     instructions: str = ""
+
+    @field_validator("divisions", mode="before")
+    @classmethod
+    def normalize_request_divisions(cls, value: Any) -> List[str]:
+        return normalize_divisions(value)
 
     @model_validator(mode="before")
     @classmethod
@@ -157,6 +180,7 @@ class TenderAnalysisPreview(BaseModel):
     scope_of_work: ScopePreview
     risk_assessment: RiskPreview
     pricing_impacts: PricingImpactPreview
+    addenda_summary: SummaryPreview
 
 
 class TenderAnalysisResponse(BaseModel):
@@ -173,6 +197,33 @@ class TenderAnalysisResponse(BaseModel):
     metrics: AnalysisMetrics
     analysis_preview: TenderAnalysisPreview
     sources: List[str] = Field(default_factory=list)
+
+
+class ProjectSummaryHighlight(BaseModel):
+    """Key highlight item for the summary response."""
+
+    title: str
+    description: str
+    type: str
+
+
+class ProjectSummaryDivision(BaseModel):
+    """Selected division item for the summary response."""
+
+    code: str
+    name: str
+
+
+class ProjectSummaryResponse(BaseModel):
+    """Flat summary response for the AI analysis results screen."""
+    model_config = ConfigDict(coerce_numbers_to_str=True)
+
+    estimated_value: int
+    duration_weeks: int
+    labor_hours: int
+    total_items: int
+    key_highlights: List[ProjectSummaryHighlight]
+    selected_divisions: List[ProjectSummaryDivision]
 
 
 class ErrorResponse(BaseModel):

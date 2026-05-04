@@ -14,9 +14,9 @@ from sqlalchemy.pool import StaticPool
 from app.database import get_db
 from app.main import app
 from app.models import Base, ChatHistory, Document
-from app.routes import analysis as analysis_routes
 from app.routes import chat as chat_routes
 from app.routes import documents as document_routes
+from app.routes import summary as summary_routes
 
 
 SQLALCHEMY_DATABASE_URL = "sqlite://"
@@ -55,6 +55,7 @@ class FakeRagService:
         project_name,
         project_address,
         filename,
+        source_type,
         db,
     ):
         doc = db.query(Document).filter(Document.id == document_id).first()
@@ -141,6 +142,11 @@ class FakeAnalysisService:
                     ],
                     "badge": "1 cost factor analyzed",
                 },
+                "addenda_summary": {
+                    "title": "Addenda Summary",
+                    "content": "Addendum 01 changes the window specification.",
+                    "badge": "1 addendum change identified",
+                },
             },
             "sources": ["spec.pdf"],
         }
@@ -177,7 +183,7 @@ def fake_rag_service(monkeypatch, tmp_path):
 def fake_analysis_service(monkeypatch):
     """Patch analysis service to avoid OpenAI/Qdrant during API tests."""
     fake_service = FakeAnalysisService()
-    monkeypatch.setattr(analysis_routes, "get_analysis_service", lambda: fake_service)
+    monkeypatch.setattr(summary_routes, "get_analysis_service", lambda: fake_service)
 
 
 class TestHealth:
@@ -208,6 +214,8 @@ class TestDocuments:
                 "project_id": TEST_PROJECT_ID,
                 "project_name": TEST_PROJECT_NAME,
                 "project_address": TEST_PROJECT_ADDRESS,
+                "divisions": '["06", "08"]',
+                "instructions": "Focus on openings and wood scope.",
             },
             files=[
                 ("files", ("first.txt", b"first document", "text/plain")),
@@ -220,6 +228,9 @@ class TestDocuments:
         assert len(data) == 2
         assert {item["filename"] for item in data} == {"first.txt", "second.txt"}
         assert all(item["status"] == "success" for item in data)
+        assert all(item["source_type"] == "document" for item in data)
+        assert all(item["divisions"] == ["06", "08"] for item in data)
+        assert all(item["instructions"] == "Focus on openings and wood scope." for item in data)
         assert all(item["total_chunks"] == 2 for item in data)
         assert all(item["project_name"] == TEST_PROJECT_NAME for item in data)
         assert all(item["project_address"] == TEST_PROJECT_ADDRESS for item in data)
@@ -233,8 +244,56 @@ class TestDocuments:
         assert len(documents) == 2
         assert all(doc["user_id"] == TEST_USER_ID for doc in documents)
         assert all(doc["project_id"] == TEST_PROJECT_ID for doc in documents)
+        assert all(doc["source_type"] == "document" for doc in documents)
+        assert all(doc["divisions"] == ["06", "08"] for doc in documents)
+        assert all(doc["instructions"] == "Focus on openings and wood scope." for doc in documents)
         assert all(doc["project_name"] == TEST_PROJECT_NAME for doc in documents)
         assert all(doc["project_address"] == TEST_PROJECT_ADDRESS for doc in documents)
+
+    def test_upload_accepts_multiple_addendum_files(self, client, fake_rag_service):
+        """Test upload accepts addendum as a separate multiple-file field."""
+        response = client.post(
+            "/documents/upload",
+            data={
+                "user_id": TEST_USER_ID,
+                "project_id": TEST_PROJECT_ID,
+                "project_name": TEST_PROJECT_NAME,
+                "project_address": TEST_PROJECT_ADDRESS,
+                "divisions": "06,08",
+                "instructions": "Review addenda.",
+            },
+            files=[
+                ("files", ("spec.txt", b"base specification", "text/plain")),
+                ("addendum", ("addendum-01.txt", b"window changes", "text/plain")),
+                ("addendum", ("addendum-02.txt", b"schedule changes", "text/plain")),
+            ],
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 3
+        assert [item["source_type"] for item in data] == [
+            "document",
+            "addendum",
+            "addendum",
+        ]
+        assert all(item["status"] == "success" for item in data)
+        assert all(item["divisions"] == ["06", "08"] for item in data)
+        assert all(item["instructions"] == "Review addenda." for item in data)
+
+        list_response = client.get(
+            "/documents",
+            params={"user_id": TEST_USER_ID, "project_id": TEST_PROJECT_ID},
+        )
+        assert list_response.status_code == 200
+        documents = list_response.json()
+        assert {doc["filename"]: doc["source_type"] for doc in documents} == {
+            "spec.txt": "document",
+            "addendum-01.txt": "addendum",
+            "addendum-02.txt": "addendum",
+        }
+        assert all(doc["divisions"] == ["06", "08"] for doc in documents)
+        assert all(doc["instructions"] == "Review addenda." for doc in documents)
 
 
 class TestChat:
@@ -269,86 +328,175 @@ class TestChat:
         assert history["messages"][0]["id"] == data["id"]
 
 
-class TestAnalysis:
-    """Tender analysis tests."""
+class TestSummary:
+    """Project summary tests."""
 
-    def test_tender_analysis_returns_preview_shape(self, client, fake_analysis_service):
-        """Test tender analysis accepts selected divisions and instructions."""
-        response = client.post(
-            "/analysis/tender",
-            json={
+    def test_summary_get_route_returns_dashboard_shape(
+        self,
+        client,
+        fake_rag_service,
+        fake_analysis_service,
+    ):
+        """Test summary uses saved upload inputs and returns UI-shaped output."""
+        upload_response = client.post(
+            "/documents/upload",
+            data={
                 "user_id": TEST_USER_ID,
                 "project_id": TEST_PROJECT_ID,
-                "divisions": ["06", "08"],
+                "project_name": TEST_PROJECT_NAME,
+                "project_address": TEST_PROJECT_ADDRESS,
+                "divisions": '["06", "08"]',
                 "instructions": "Focus on openings and wood scope.",
+            },
+            files=[
+                ("files", ("spec.txt", b"base specification", "text/plain")),
+                ("addendum", ("addendum-01.txt", b"window changes", "text/plain")),
+                ("addendum", ("addendum-02.txt", b"schedule changes", "text/plain")),
+            ],
+        )
+        assert upload_response.status_code == 200
+
+        response = client.get(
+            "/summary",
+            params={
+                "user_id": TEST_USER_ID,
+                "project_id": TEST_PROJECT_ID,
             },
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] == "preview"
-        assert data["metrics"]["risk_score"] == 68
+        assert set(data.keys()) == {
+            "estimated_value",
+            "duration_weeks",
+            "labor_hours",
+            "total_items",
+            "key_highlights",
+            "selected_divisions",
+        }
+        assert data["estimated_value"] == 485000
+        assert data["duration_weeks"] == 14
+        assert data["labor_hours"] == 2840
+        assert data["total_items"] == 3
+        assert data["key_highlights"][0]["title"] == "Scope Summary"
+        assert data["key_highlights"][0]["type"] == "scope"
+        assert data["key_highlights"][1]["title"] == "Pricing Impacts"
+        assert data["key_highlights"][1]["type"] == "pricing"
+        assert data["key_highlights"][2]["title"] == "Risks & Coordination"
+        assert data["key_highlights"][2]["type"] == "risk"
+        assert data["key_highlights"][3]["title"] == "Addenda Changes"
+        assert data["key_highlights"][3]["description"] == (
+            "Addendum 01 changes the window specification."
+        )
+        assert data["key_highlights"][3]["type"] == "addenda"
+        assert data["selected_divisions"][0] == {
+            "code": "06",
+            "name": "Wood & Plastics",
+        }
+
+    def test_summary_get_route_accepts_only_user_and_project_id(
+        self,
+        client,
+        fake_rag_service,
+        fake_analysis_service,
+    ):
+        """Test GET summary input is only user_id and project_id."""
+        upload_response = client.post(
+            "/documents/upload",
+            data={
+                "user_id": TEST_USER_ID,
+                "project_id": TEST_PROJECT_ID,
+                "project_name": TEST_PROJECT_NAME,
+                "project_address": TEST_PROJECT_ADDRESS,
+                "divisions": '["06", "08"]',
+                "instructions": "Saved upload instructions.",
+            },
+            files=[
+                ("files", ("spec.txt", b"base specification", "text/plain")),
+            ],
+        )
+        assert upload_response.status_code == 200
+
+        response = client.get(
+            "/summary",
+            params={
+                "user_id": TEST_USER_ID,
+                "project_id": TEST_PROJECT_ID,
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
         assert data["selected_divisions"][0]["code"] == "06"
-        assert data["analysis_preview"]["scope_of_work"]["items"] == [
-            "Wooden doors",
-            "Aluminum windows",
-        ]
-        assert data["sources"] == ["spec.pdf"]
 
-    def test_tender_analysis_accepts_single_division_alias(self, client, fake_analysis_service):
-        """Test client can send division instead of divisions."""
-        response = client.post(
-            "/analysis/tender",
-            json={
+    def test_summary_requires_uploaded_documents(self, client, fake_analysis_service):
+        """Test summary rejects projects with no uploaded files."""
+        response = client.get(
+            "/summary",
+            params={
                 "user_id": TEST_USER_ID,
                 "project_id": TEST_PROJECT_ID,
-                "division": "Div 06",
-                "instructions": "",
             },
         )
 
-        assert response.status_code == 200
-        assert response.json()["selected_divisions"][0]["code"] == "06"
+        assert response.status_code == 404
+        assert response.json()["detail"] == "No uploaded documents found for this project"
 
-    def test_tender_analysis_accepts_divion_typo_alias(self, client, fake_analysis_service):
-        """Test client can send divion typo instead of divisions."""
-        response = client.post(
-            "/analysis/tender",
-            json={
+    def test_summary_requires_saved_divisions(
+        self,
+        client,
+        fake_rag_service,
+        fake_analysis_service,
+    ):
+        """Test summary rejects uploads without saved divisions."""
+        upload_response = client.post(
+            "/documents/upload",
+            data={
                 "user_id": TEST_USER_ID,
                 "project_id": TEST_PROJECT_ID,
-                "divion": "Div 06",
-                "instructions": "",
             },
+            files=[
+                ("files", ("spec.txt", b"base specification", "text/plain")),
+            ],
         )
+        assert upload_response.status_code == 200
 
-        assert response.status_code == 200
-        assert response.json()["selected_divisions"][0]["code"] == "06"
-
-    def test_tender_analysis_requires_divisions(self, client, fake_analysis_service):
-        """Test analysis rejects missing divisions."""
-        response = client.post(
-            "/analysis/tender",
-            json={
+        response = client.get(
+            "/summary",
+            params={
                 "user_id": TEST_USER_ID,
                 "project_id": TEST_PROJECT_ID,
-                "divisions": [],
-                "instructions": "Analyze tender.",
             },
         )
 
         assert response.status_code == 400
-        assert response.json()["detail"] == "At least one division must be selected"
+        assert response.json()["detail"] == "No saved divisions found for this project"
 
-    def test_tender_analysis_requires_valid_division_code(self, client, fake_analysis_service):
-        """Test analysis rejects division values without a CSI code."""
-        response = client.post(
-            "/analysis/tender",
-            json={
+    def test_summary_requires_valid_saved_division_code(
+        self,
+        client,
+        fake_rag_service,
+        fake_analysis_service,
+    ):
+        """Test summary rejects saved division values without a CSI code."""
+        upload_response = client.post(
+            "/documents/upload",
+            data={
                 "user_id": TEST_USER_ID,
                 "project_id": TEST_PROJECT_ID,
-                "divisions": ["openings"],
-                "instructions": "Analyze tender.",
+                "divisions": "openings",
+            },
+            files=[
+                ("files", ("spec.txt", b"base specification", "text/plain")),
+            ],
+        )
+        assert upload_response.status_code == 200
+
+        response = client.get(
+            "/summary",
+            params={
+                "user_id": TEST_USER_ID,
+                "project_id": TEST_PROJECT_ID,
             },
         )
 
