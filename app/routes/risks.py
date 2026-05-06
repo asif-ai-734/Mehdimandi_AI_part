@@ -1,5 +1,5 @@
 """
-API route for the scope of work screen.
+API route for the risks screen.
 """
 
 import logging
@@ -10,22 +10,32 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Document
-from app.schemas.scope import ScopeFilter, ScopeItem, ScopeOfWorkResponse
-from app.services.scope_service import get_scope_service
+from app.schemas.risks import (
+    RiskFilter,
+    RiskItem,
+    RisksResponse,
+)
+from app.services.risks_service import get_risks_service
 from app.utils.analysis_inputs import has_valid_division_code, normalize_divisions
-from app.utils.scopes import is_valid_scope_value, normalize_scope_value
+from app.utils.scopes import (
+    is_valid_scope_value,
+    normalize_scope_value,
+)
 
 
-router = APIRouter(prefix="/scope", tags=["analysis"])
+router = APIRouter(prefix="/risks", tags=["analysis"])
 logger = logging.getLogger(__name__)
 
 
-@router.get("", response_model=ScopeOfWorkResponse)
-async def get_scope(
+@router.get("", response_model=RisksResponse)
+async def get_risks(
     user_id: str,
     project_id: str,
     db: Session = Depends(get_db),
-) -> ScopeOfWorkResponse:
+) -> RisksResponse:
+    """
+    Return structured risks and coordination items.
+    """
     normalized_user_id = normalize_scope_value(user_id)
     normalized_project_id = normalize_scope_value(project_id)
 
@@ -41,23 +51,23 @@ async def get_scope(
             detail="project_id is required",
         )
 
-    stored_divisions, stored_instructions = get_saved_scope_inputs(
+    stored_divisions, stored_instructions = get_saved_risk_inputs(
         db=db,
         user_id=normalized_user_id,
         project_id=normalized_project_id,
     )
 
-    payload = run_scope_analysis(
+    payload = run_risk_analysis(
         user_id=normalized_user_id,
         project_id=normalized_project_id,
         divisions=stored_divisions,
         instructions=stored_instructions,
     )
 
-    return build_scope_response(payload)
+    return build_risks_response(payload)
 
 
-def get_saved_scope_inputs(
+def get_saved_risk_inputs(
     db: Session,
     user_id: str,
     project_id: str,
@@ -89,7 +99,7 @@ def get_saved_scope_inputs(
     return divisions, instructions
 
 
-def run_scope_analysis(
+def run_risk_analysis(
     user_id: str,
     project_id: str,
     divisions: List[str],
@@ -114,9 +124,9 @@ def run_scope_analysis(
         )
 
     try:
-        scope_service = get_scope_service()
+        risks_service = get_risks_service()
 
-        return scope_service.extract_scope_of_work(
+        return risks_service.extract_risks(
             user_id=user_id,
             project_id=project_id,
             divisions=divisions,
@@ -130,52 +140,38 @@ def run_scope_analysis(
         ) from exc
 
     except Exception as exc:
-        logger.error(f"Error generating scope of work: {str(exc)}")
+        logger.error(f"Error generating risks: {str(exc)}")
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error generating scope of work: {str(exc)}",
+            detail=f"Error generating risks: {str(exc)}",
         ) from exc
 
 
-def build_scope_response(payload: dict[str, Any]) -> ScopeOfWorkResponse:
+def build_risks_response(
+    payload: dict[str, Any],
+) -> RisksResponse:
     items = [
-        ScopeItem.model_validate(item)
+        RiskItem.model_validate(item)
         for item in payload.get("items", [])
         if isinstance(item, dict)
     ]
 
-    return ScopeOfWorkResponse(
+    return RisksResponse(
         total_items=len(items),
         showing=f"{len(items)} of {len(items)}",
-        filters=build_scope_filters(items),
+        filters=build_risk_filters(items),
         items=items,
     )
 
 
-def build_scope_filters(items: List[ScopeItem]) -> List[ScopeFilter]:
-    filters = [
-        ScopeFilter(
+def build_risk_filters(
+    items: List[RiskItem],
+) -> List[RiskFilter]:
+    return [
+        RiskFilter(
             code="all",
-            label="All Scope",
+            label="All Risks",
             active=True,
         )
     ]
-
-    seen = set()
-
-    for item in items:
-        if item.division_code in seen:
-            continue
-
-        seen.add(item.division_code)
-
-        filters.append(
-            ScopeFilter(
-                code=item.division_code,
-                label=f"Div {item.division_code}",
-                active=False,
-            )
-        )
-
-    return filters

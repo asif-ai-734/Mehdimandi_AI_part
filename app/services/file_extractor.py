@@ -37,6 +37,26 @@ def extract_text_from_pdf(file_path: str) -> str:
     return "\n".join(text)
 
 
+def get_page_count(file_path: str, file_type: str) -> Optional[int]:
+    """Return the physical page count when the file format exposes it."""
+    file_type = file_type.lower().strip('.')
+
+    if file_type != "pdf":
+        return None
+
+    try:
+        import PyPDF2
+    except ImportError:
+        raise ImportError("PyPDF2 is required to count PDF pages")
+
+    try:
+        with open(file_path, 'rb') as pdf_file:
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            return len(pdf_reader.pages)
+    except Exception as e:
+        raise ValueError(f"Error counting PDF pages: {str(e)}")
+
+
 def extract_text_from_docx(file_path: str) -> str:
     """Extract text from a DOCX file."""
     try:

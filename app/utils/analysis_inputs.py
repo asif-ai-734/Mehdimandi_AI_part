@@ -29,6 +29,14 @@ def divisions_to_json(value: Any) -> str:
     return json.dumps(normalize_divisions(value))
 
 
+def has_valid_division_code(value: Any) -> bool:
+    """Return True when at least one division-like value contains a CSI code."""
+    return any(
+        re.search(r"\d{1,2}", str(division or ""))
+        for division in normalize_divisions(value)
+    )
+
+
 def _expand_division_item(value: Any) -> List[str]:
     if value is None:
         return []

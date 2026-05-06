@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Document
 from app.schemas import DocumentResponse, DocumentUploadResponse
-from app.services.file_extractor import validate_file, get_file_type
+from app.services.file_extractor import get_file_type, get_page_count, validate_file
 from app.services.rag_service import get_rag_service
 from app.utils.analysis_inputs import divisions_to_json, normalize_divisions
 from app.utils.scopes import is_valid_scope_value, normalize_scope_value
@@ -31,7 +31,7 @@ def save_uploaded_file(
     project_id: str,
     user_id: str,
     source_type: str = SOURCE_TYPE_DOCUMENT,
-) -> str:
+) -> Tuple[str, int]:
     """
     Save uploaded file to disk.
 
@@ -41,7 +41,7 @@ def save_uploaded_file(
         user_id: User ID
 
     Returns:
-        Path to saved file
+        Path to saved file and file size in bytes
 
     Raises:
         HTTPException: If file size exceeds limit
@@ -69,7 +69,7 @@ def save_uploaded_file(
         f.write(file_content)
 
     file.file.seek(0)
-    return file_path
+    return file_path, file_size
 
 
 def _collect_uploads(
@@ -92,6 +92,8 @@ def _upload_response(
     project_address: str,
     divisions: List[str],
     instructions: str,
+    file_size: Optional[int],
+    page_count: Optional[int],
     total_chunks: int,
     status_value: str,
     message: str,
@@ -106,6 +108,8 @@ def _upload_response(
         project_address=project_address,
         divisions=divisions,
         instructions=instructions,
+        file_size=file_size,
+        page_count=page_count,
         total_chunks=total_chunks,
         status=status_value,
         message=message,
@@ -135,6 +139,8 @@ def _process_uploaded_file(
                 project_address=project_address,
                 divisions=divisions,
                 instructions=instructions,
+                file_size=None,
+                page_count=None,
                 total_chunks=0,
                 status_value="error",
                 message="Invalid filename",
@@ -156,13 +162,20 @@ def _process_uploaded_file(
                 project_address=project_address,
                 divisions=divisions,
                 instructions=instructions,
+                file_size=None,
+                page_count=None,
                 total_chunks=0,
                 status_value="error",
                 message=validation_message,
             )
 
         try:
-            file_path = save_uploaded_file(file, project_id, user_id, source_type)
+            file_path, file_size = save_uploaded_file(
+                file,
+                project_id,
+                user_id,
+                source_type,
+            )
         except HTTPException as exc:
             return _upload_response(
                 filename=file.filename,
@@ -172,10 +185,18 @@ def _process_uploaded_file(
                 project_address=project_address,
                 divisions=divisions,
                 instructions=instructions,
+                file_size=None,
+                page_count=None,
                 total_chunks=0,
                 status_value="error",
                 message=str(exc.detail),
             )
+
+        try:
+            page_count = get_page_count(file_path, file_type)
+        except Exception as exc:
+            logger.warning(f"Unable to count pages for {file.filename}: {str(exc)}")
+            page_count = None
 
         db_document = Document(
             filename=file.filename,
@@ -188,6 +209,8 @@ def _process_uploaded_file(
             project_address=project_address,
             divisions=divisions_to_json(divisions),
             instructions=instructions,
+            file_size=file_size,
+            page_count=page_count,
             total_chunks=0,
         )
         db.add(db_document)
@@ -217,6 +240,8 @@ def _process_uploaded_file(
                 project_address=project_address,
                 divisions=divisions,
                 instructions=instructions,
+                file_size=file_size,
+                page_count=page_count,
                 total_chunks=0,
                 status_value="error",
                 message=error,
@@ -231,6 +256,8 @@ def _process_uploaded_file(
             project_address=project_address,
             divisions=divisions,
             instructions=instructions,
+            file_size=file_size,
+            page_count=page_count,
             total_chunks=total_chunks,
             status_value="success",
             message="Document processed successfully",
@@ -246,6 +273,8 @@ def _process_uploaded_file(
             project_address=project_address,
             divisions=divisions,
             instructions=instructions,
+            file_size=None,
+            page_count=None,
             total_chunks=0,
             status_value="error",
             message=f"Error uploading file: {str(exc)}",

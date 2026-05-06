@@ -310,6 +310,9 @@ def default_allocations(count: int) -> List[int]:
 
 
 def format_selected_divisions(selected_divisions: List[SelectedDivision]) -> str:
+    if not selected_divisions:
+        return "All relevant divisions found in the retrieved context."
+
     return "\n".join(
         f"Div {division.code}: {division.label}"
         for division in selected_divisions

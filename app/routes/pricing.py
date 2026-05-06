@@ -1,5 +1,5 @@
 """
-API route for the scope of work screen.
+API route for the pricing impacts screen.
 """
 
 import logging
@@ -10,22 +10,32 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Document
-from app.schemas.scope import ScopeFilter, ScopeItem, ScopeOfWorkResponse
-from app.services.scope_service import get_scope_service
+from app.schemas.pricing import (
+    PricingFilter,
+    PricingImpactItem,
+    PricingImpactsResponse,
+)
+from app.services.pricing_service import get_pricing_service
 from app.utils.analysis_inputs import has_valid_division_code, normalize_divisions
-from app.utils.scopes import is_valid_scope_value, normalize_scope_value
+from app.utils.scopes import (
+    is_valid_scope_value,
+    normalize_scope_value,
+)
 
 
-router = APIRouter(prefix="/scope", tags=["analysis"])
+router = APIRouter(prefix="/pricing", tags=["analysis"])
 logger = logging.getLogger(__name__)
 
 
-@router.get("", response_model=ScopeOfWorkResponse)
-async def get_scope(
+@router.get("", response_model=PricingImpactsResponse)
+async def get_pricing(
     user_id: str,
     project_id: str,
     db: Session = Depends(get_db),
-) -> ScopeOfWorkResponse:
+) -> PricingImpactsResponse:
+    """
+    Return structured pricing impacts for a project.
+    """
     normalized_user_id = normalize_scope_value(user_id)
     normalized_project_id = normalize_scope_value(project_id)
 
@@ -41,27 +51,30 @@ async def get_scope(
             detail="project_id is required",
         )
 
-    stored_divisions, stored_instructions = get_saved_scope_inputs(
+    stored_divisions, stored_instructions = get_saved_pricing_inputs(
         db=db,
         user_id=normalized_user_id,
         project_id=normalized_project_id,
     )
 
-    payload = run_scope_analysis(
+    payload = run_pricing_analysis(
         user_id=normalized_user_id,
         project_id=normalized_project_id,
         divisions=stored_divisions,
         instructions=stored_instructions,
     )
 
-    return build_scope_response(payload)
+    return build_pricing_response(payload)
 
 
-def get_saved_scope_inputs(
+def get_saved_pricing_inputs(
     db: Session,
     user_id: str,
     project_id: str,
 ) -> tuple[List[str], str]:
+    """
+    Read saved divisions and instructions for a project.
+    """
     documents = db.query(Document).filter(
         Document.project_id == project_id,
         Document.user_id == user_id,
@@ -89,12 +102,15 @@ def get_saved_scope_inputs(
     return divisions, instructions
 
 
-def run_scope_analysis(
+def run_pricing_analysis(
     user_id: str,
     project_id: str,
     divisions: List[str],
     instructions: str,
 ) -> dict[str, Any]:
+    """
+    Validate pricing inputs and call pricing service.
+    """
     if not divisions:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -114,9 +130,9 @@ def run_scope_analysis(
         )
 
     try:
-        scope_service = get_scope_service()
+        pricing_service = get_pricing_service()
 
-        return scope_service.extract_scope_of_work(
+        return pricing_service.extract_pricing_impacts(
             user_id=user_id,
             project_id=project_id,
             divisions=divisions,
@@ -130,52 +146,52 @@ def run_scope_analysis(
         ) from exc
 
     except Exception as exc:
-        logger.error(f"Error generating scope of work: {str(exc)}")
+        logger.error(f"Error generating pricing impacts: {str(exc)}")
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error generating scope of work: {str(exc)}",
+            detail=f"Error generating pricing impacts: {str(exc)}",
         ) from exc
 
 
-def build_scope_response(payload: dict[str, Any]) -> ScopeOfWorkResponse:
+def build_pricing_response(
+    payload: dict[str, Any],
+) -> PricingImpactsResponse:
+    """
+    Convert pricing payload into frontend response shape.
+    """
     items = [
-        ScopeItem.model_validate(item)
+        PricingImpactItem.model_validate(item)
         for item in payload.get("items", [])
         if isinstance(item, dict)
     ]
 
-    return ScopeOfWorkResponse(
+    return PricingImpactsResponse(
         total_items=len(items),
         showing=f"{len(items)} of {len(items)}",
-        filters=build_scope_filters(items),
+        filters=build_pricing_filters(items),
         items=items,
     )
 
 
-def build_scope_filters(items: List[ScopeItem]) -> List[ScopeFilter]:
-    filters = [
-        ScopeFilter(
+def build_pricing_filters(
+    items: List[PricingImpactItem],
+) -> List[PricingFilter]:
+    """
+    Build pricing filters.
+
+    For now only "All Pricing" exists.
+    Later you can add:
+    - allowances
+    - schedule
+    - logistics
+    - risk
+    - addenda
+    """
+    return [
+        PricingFilter(
             code="all",
-            label="All Scope",
+            label="All Pricing",
             active=True,
         )
     ]
-
-    seen = set()
-
-    for item in items:
-        if item.division_code in seen:
-            continue
-
-        seen.add(item.division_code)
-
-        filters.append(
-            ScopeFilter(
-                code=item.division_code,
-                label=f"Div {item.division_code}",
-                active=False,
-            )
-        )
-
-    return filters

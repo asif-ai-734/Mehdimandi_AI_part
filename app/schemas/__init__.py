@@ -24,6 +24,8 @@ class DocumentResponse(BaseModel):
     project_address: str = ""
     divisions: List[str] = Field(default_factory=list)
     instructions: str = ""
+    file_size: Optional[int] = None
+    page_count: Optional[int] = None
     total_chunks: int
     created_at: datetime
 
@@ -45,6 +47,8 @@ class DocumentUploadResponse(BaseModel):
     project_address: str = ""
     divisions: List[str] = Field(default_factory=list)
     instructions: str = ""
+    file_size: Optional[int] = None
+    page_count: Optional[int] = None
     total_chunks: int
     status: str
     message: Optional[str] = None

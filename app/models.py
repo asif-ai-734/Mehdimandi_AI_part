@@ -25,6 +25,8 @@ class Document(Base):
     project_address = Column(String(500), default="", nullable=False)
     divisions = Column(Text, default="[]", nullable=False)
     instructions = Column(Text, default="", nullable=False)
+    file_size = Column(Integer, default=0, nullable=False)
+    page_count = Column(Integer, nullable=True)
     total_chunks = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 

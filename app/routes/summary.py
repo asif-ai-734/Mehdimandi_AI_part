@@ -19,11 +19,11 @@ from app.schemas import (
     TenderAnalysisResponse,
 )
 from app.services.analysis_service import get_analysis_service
-from app.utils.analysis_inputs import normalize_divisions
+from app.utils.analysis_inputs import has_valid_division_code, normalize_divisions
 from app.utils.scopes import is_valid_scope_value, normalize_scope_value
 
 
-router = APIRouter(prefix="/summary", tags=["summary"])
+router = APIRouter(prefix="/summary", tags=["analysis"])
 logger = logging.getLogger(__name__)
 
 
@@ -125,7 +125,7 @@ def run_summary_analysis(request: TenderAnalysisRequest) -> TenderAnalysisRespon
             detail="No saved divisions found for this project",
         )
 
-    if not any(re.search(r"\d{1,2}", str(division or "")) for division in request.divisions):
+    if not has_valid_division_code(request.divisions):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one valid division code must be selected",

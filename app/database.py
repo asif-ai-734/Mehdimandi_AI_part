@@ -48,6 +48,10 @@ def ensure_database_schema() -> None:
         statements.append("ALTER TABLE documents ADD COLUMN divisions TEXT NOT NULL DEFAULT '[]'")
     if "instructions" not in existing_columns:
         statements.append("ALTER TABLE documents ADD COLUMN instructions TEXT NOT NULL DEFAULT ''")
+    if "file_size" not in existing_columns:
+        statements.append("ALTER TABLE documents ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0")
+    if "page_count" not in existing_columns:
+        statements.append("ALTER TABLE documents ADD COLUMN page_count INTEGER")
 
     if not statements:
         return
