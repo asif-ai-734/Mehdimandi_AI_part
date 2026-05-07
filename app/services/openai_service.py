@@ -31,8 +31,23 @@ Keep your answers concise and focused on the document content."""
         self.model = model or settings.openai_model
         
         if not self.api_key:
-            raise ValueError("OPENAI_API_KEY environment variable not set")
+            raise ValueError("OpenAI API key is not configured")
         
+        self.client = OpenAI(api_key=self.api_key)
+
+    def refresh_from_settings(self) -> None:
+        """Refresh this service if runtime OpenAI settings changed."""
+        api_key = settings.openai_api_key
+        model = settings.openai_model
+
+        if self.api_key == api_key and self.model == model:
+            return
+
+        self.api_key = api_key
+        self.model = model
+        if not self.api_key:
+            raise ValueError("OpenAI API key is not configured")
+
         self.client = OpenAI(api_key=self.api_key)
     
     def generate_response(
@@ -56,6 +71,7 @@ Keep your answers concise and focused on the document content."""
         Returns:
             Generated response text
         """
+        self.refresh_from_settings()
         system_prompt = system_prompt or self.SYSTEM_PROMPT
         
         user_message = f"""Context from uploaded documents:
@@ -100,6 +116,7 @@ Please answer based only on the context provided above."""
         Returns:
             Generated response text
         """
+        self.refresh_from_settings()
         system_prompt = system_prompt or self.SYSTEM_PROMPT
         
         all_messages = [
@@ -132,6 +149,7 @@ Please answer based only on the context provided above."""
 
         Messages may include multimodal content for drawing-page analysis.
         """
+        self.refresh_from_settings()
         all_messages = []
         if system_prompt:
             all_messages.append({"role": "system", "content": system_prompt})
@@ -197,9 +215,19 @@ _openai_service = None
 def get_openai_service() -> OpenAIService:
     """Get or create the global OpenAI service instance."""
     global _openai_service
-    if _openai_service is None:
+    if (
+        _openai_service is None
+        or _openai_service.api_key != settings.openai_api_key
+        or _openai_service.model != settings.openai_model
+    ):
         _openai_service = OpenAIService()
     return _openai_service
+
+
+def reset_openai_service() -> None:
+    """Force the next OpenAI service lookup to use current runtime settings."""
+    global _openai_service
+    _openai_service = None
 
 
 def generate_chat_response(query: str, context: str) -> str:

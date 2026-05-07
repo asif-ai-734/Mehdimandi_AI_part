@@ -21,6 +21,7 @@ from app.routes.exclusions import router as exclusions_router
 from app.routes.addenda import router as addenda_router
 from app.routes.quote_draft import router as quote_draft_router
 from app.routes.resources import router as resources_router
+from app.routes.system import router as system_router
 from app.services.embeddings import get_embeddings_service
 from app.services.qdrant_service import get_qdrant_service
 import logging
@@ -79,8 +80,9 @@ app.add_middleware(
 )
 
 
+app.include_router(system_router)
 app.include_router(documents.router)
-app.include_router(chat.router)
+# app.include_router(chat.router)
 app.include_router(summary.router)
 app.include_router(scope_router)
 app.include_router(pricing_router)

@@ -5,12 +5,17 @@ Loads environment variables and provides configuration objects.
 
 import os
 from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore",
+    )
     
     # Database
     database_url: str = os.getenv(
@@ -19,8 +24,10 @@ class Settings(BaseSettings):
     )
     
     # OpenAI
-    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    # openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    # openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    api_key: str = ""
+    model_name: str = "gpt-4o-mini"
     
     # Qdrant
     qdrant_url: str = os.getenv("QDRANT_URL", "http://localhost:6333")
@@ -42,13 +49,38 @@ class Settings(BaseSettings):
     keyword_scan_limit: int = int(os.getenv("KEYWORD_SCAN_LIMIT", "500"))
     
     # File Upload
-    max_file_size: int = 10 * 1024 * 1024  # 10 MB
+    # max_file_size: int = 10 * 1024 * 1024  # 10 MB
+    upload_size: int = 10 * 1024 * 1024
     allowed_file_types: list = ["pdf", "docx", "txt"]
     upload_dir: str = "uploads"
     
     # API
     api_title: str = "Document RAG API"
     api_version: str = "1.0.0"
+
+    @property
+    def openai_api_key(self) -> str:
+        return self.api_key
+
+    @openai_api_key.setter
+    def openai_api_key(self, value: str) -> None:
+        self.api_key = value
+
+    @property
+    def openai_model(self) -> str:
+        return self.model_name
+
+    @openai_model.setter
+    def openai_model(self, value: str) -> None:
+        self.model_name = value
+
+    @property
+    def max_file_size(self) -> int:
+        return self.upload_size
+
+    @max_file_size.setter
+    def max_file_size(self, value: int) -> None:
+        self.upload_size = value
     
 
 settings = Settings()
