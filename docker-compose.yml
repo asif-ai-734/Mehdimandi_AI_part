@@ -4,7 +4,7 @@ services:
     container_name: rag-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8002:8000"
     environment:
       DATABASE_URL: sqlite:///./data/rag.db
       QDRANT_URL: http://qdrant:6333

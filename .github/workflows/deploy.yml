@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/mehdi-ai
+  IMAGE_NAME: softvence/mehdi-ai
 
 jobs:
   build:
@@ -53,34 +53,23 @@ jobs:
     needs: build
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ${{ secrets.EC2_PROJECT_DIR }}
 
-      - name: Configure SSH
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
-          chmod 600 ~/.ssh/ec2_key
-          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+            echo "Pulling latest image..."
+            docker pull softvence/mehdi-ai:latest
 
-      - name: Copy Docker Compose file
-        run: |
-          ssh -i ~/.ssh/ec2_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" "mkdir -p '${{ secrets.EC2_PROJECT_DIR }}'"
-          scp -i ~/.ssh/ec2_key docker-compose.yml "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ secrets.EC2_PROJECT_DIR }}/docker-compose.yml"
-
-      - name: Pull image and restart containers
-        run: |
-          ssh -i ~/.ssh/ec2_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" << 'EOF'
-            set -e
-            cd "${{ secrets.EC2_PROJECT_DIR }}"
-
-            echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login \
-              --username "${{ secrets.DOCKERHUB_USERNAME }}" \
-              --password-stdin
-
-            export DOCKER_IMAGE="${{ needs.build.outputs.image }}"
-
-            docker compose pull api
+            echo "Restarting container with latest image..."
             docker compose up -d
-            docker image prune -af
-          EOF
+
+            echo "Removing unused images..."
+            docker image prune -f
+
+            echo "Cleanup stopped containers..."
+            docker container prune -f
