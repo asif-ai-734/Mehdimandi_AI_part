@@ -1,41 +1,42 @@
-version: '3.8'
-
 services:
-  # FastAPI Application
   api:
-    build: .
+    image: ${DOCKER_IMAGE:-softvence/mehdi-ai:latest}
     container_name: rag-api
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=sqlite:///./data/rag.db
-      - QDRANT_URL=http://qdrant:6333
-      - QDRANT_COLLECTION_NAME=project_documents
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      DATABASE_URL: sqlite:///./data/rag.db
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-optional-qdrant-api-key}
+      QDRANT_COLLECTION_NAME: ${QDRANT_COLLECTION_NAME:-project_documents}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-BAAI/bge-base-en-v1.5}
+      HYBRID_CANDIDATE_MULTIPLIER: ${HYBRID_CANDIDATE_MULTIPLIER:-4}
+      KEYWORD_SCAN_LIMIT: ${KEYWORD_SCAN_LIMIT:-500}
     depends_on:
-      - qdrant
+      qdrant:
+        condition: service_healthy
     volumes:
-      - ./app:/app/app
       - ./uploads:/app/uploads
       - ./data:/app/data
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  # Qdrant Vector Database
   qdrant:
     image: qdrant/qdrant:latest
     container_name: rag-qdrant
+    restart: unless-stopped
     ports:
       - "6333:6333"
       - "6334:6334"
     environment:
-      - QDRANT_API_KEY=optional-api-key
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-optional-qdrant-api-key}
     volumes:
       - qdrant_storage:/qdrant/storage
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:6333/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f -H 'api-key: ${QDRANT_API_KEY:-optional-qdrant-api-key}' http://localhost:6333/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
 
 volumes:
   qdrant_storage:
