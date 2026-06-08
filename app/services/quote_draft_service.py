@@ -206,19 +206,12 @@ def build_quote_draft_context(
     contexts = []
     seen = set()
 
-    for query in queries:
-        query = stringify(query)
-
-        if not query:
-            continue
-
-        context, _sources = rag_service.retrieve_context(
-            query=query,
-            user_id=user_id,
-            project_id=project_id,
-            top_k=10,
-        )
-
+    for context, _sources in rag_service.retrieve_contexts(
+        queries=[stringify(query) for query in queries],
+        user_id=user_id,
+        project_id=project_id,
+        top_k=10,
+    ):
         for block in split_context_blocks(context):
             key = normalize_dedupe_key(block)
 

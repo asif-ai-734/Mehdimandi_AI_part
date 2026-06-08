@@ -213,13 +213,12 @@ def build_analysis_context(
     project_name = ""
     project_address = ""
 
-    for query in build_analysis_queries(selected_divisions, instructions):
-        context, query_sources = rag_service.retrieve_context(
-            query=query,
-            user_id=user_id,
-            project_id=project_id,
-            top_k=8,
-        )
+    for context, query_sources in rag_service.retrieve_contexts(
+        queries=build_analysis_queries(selected_divisions, instructions),
+        user_id=user_id,
+        project_id=project_id,
+        top_k=8,
+    ):
         add_context_blocks(blocks, seen_text, context)
         sources.extend(query_sources)
 

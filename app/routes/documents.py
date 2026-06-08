@@ -8,8 +8,9 @@ from typing import List, Optional, Tuple
 from fastapi import (
     APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 )
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models import Document
 from app.schemas import DocumentResponse, DocumentUploadResponse
 from app.services.file_extractor import get_file_type, get_page_count, validate_file
@@ -125,10 +126,11 @@ def _process_uploaded_file(
     project_address: str,
     divisions: List[str],
     instructions: str,
-    db: Session,
     rag_service,
 ) -> DocumentUploadResponse:
     filename = file.filename or "unknown"
+    db = SessionLocal()
+
     try:
         if not file.filename:
             return _upload_response(
@@ -279,6 +281,8 @@ def _process_uploaded_file(
             status_value="error",
             message=f"Error uploading file: {str(exc)}",
         )
+    finally:
+        db.close()
 
 
 @router.post("/upload", response_model=List[DocumentUploadResponse])
@@ -291,14 +295,13 @@ async def upload_documents(
     instructions: str = Form(""),
     files: Optional[List[UploadFile]] = File(None),
     addendum: Optional[List[UploadFile]] = File(None),
-    db: Session = Depends(get_db),
 ) -> List[DocumentUploadResponse]:
     """
     Upload and process tender documents plus optional addendum files.
 
     Supports: PDF, DOCX, TXT files.
-    Processing is synchronous so chat and analysis can use the full knowledge
-    base immediately. Addendum files are tagged separately in metadata.
+    Processing finishes before returning so chat and analysis can use the full
+    knowledge base immediately. Addendum files are tagged separately in metadata.
     """
     uploads = _collect_uploads(files, addendum)
     if not uploads:
@@ -333,8 +336,10 @@ async def upload_documents(
         )
 
     rag_service = get_rag_service()
-    return [
-        _process_uploaded_file(
+    responses = []
+    for file, source_type in uploads:
+        responses.append(await run_in_threadpool(
+            _process_uploaded_file,
             file=file,
             source_type=source_type,
             user_id=user_id,
@@ -343,11 +348,10 @@ async def upload_documents(
             project_address=project_address,
             divisions=divisions,
             instructions=instructions,
-            db=db,
             rag_service=rag_service,
-        )
-        for file, source_type in uploads
-    ]
+        ))
+
+    return responses
 
 
 @router.get("", response_model=List[DocumentResponse])

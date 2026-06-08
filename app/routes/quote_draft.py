@@ -6,6 +6,7 @@ import logging
 from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -48,7 +49,8 @@ async def get_quote_draft(
         project_id=normalized_project_id,
     )
 
-    payload = run_quote_draft_analysis(
+    payload = await run_in_threadpool(
+        run_quote_draft_analysis,
         user_id=normalized_user_id,
         project_id=normalized_project_id,
         divisions=divisions,

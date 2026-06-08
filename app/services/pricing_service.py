@@ -330,13 +330,12 @@ def build_pricing_context(
     project_name = ""
     project_address = ""
 
-    for query in build_pricing_queries(selected_divisions, instructions):
-        context, _sources = rag_service.retrieve_context(
-            query=query,
-            user_id=user_id,
-            project_id=project_id,
-            top_k=10,
-        )
+    for context, _sources in rag_service.retrieve_contexts(
+        queries=build_pricing_queries(selected_divisions, instructions),
+        user_id=user_id,
+        project_id=project_id,
+        top_k=10,
+    ):
         add_context_blocks(blocks, seen_text, context)
 
     keyword_candidates = []

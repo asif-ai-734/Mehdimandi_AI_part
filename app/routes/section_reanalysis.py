@@ -2,10 +2,12 @@
 API route for section re-analysis with temporary AI instructions.
 """
 
+import asyncio
 import logging
 from typing import Any, Callable, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -166,27 +168,33 @@ async def reanalyze_section(
         project_id=project_id,
     )
 
-    previous_payload = run_analysis(
-        user_id=user_id,
-        project_id=project_id,
-        divisions=divisions,
-        instructions=saved_instructions,
+    updated_instructions = merge_instructions(
+        saved_instructions=saved_instructions,
+        ai_instructions=ai_instructions,
+        tab=tab,
+    )
+    previous_payload, updated_payload = await asyncio.gather(
+        run_in_threadpool(
+            run_analysis,
+            user_id=user_id,
+            project_id=project_id,
+            divisions=divisions,
+            instructions=saved_instructions,
+        ),
+        run_in_threadpool(
+            run_analysis,
+            user_id=user_id,
+            project_id=project_id,
+            divisions=divisions,
+            instructions=updated_instructions,
+        ),
     )
     previous = dump_response(build_response(previous_payload))
 
-    updated_payload = run_analysis(
-        user_id=user_id,
-        project_id=project_id,
-        divisions=divisions,
-        instructions=merge_instructions(
-            saved_instructions=saved_instructions,
-            ai_instructions=ai_instructions,
-            tab=tab,
-        ),
-    )
     updated = dump_response(build_response(updated_payload))
 
-    proposed_changes = build_proposed_changes(
+    proposed_changes = await run_in_threadpool(
+        build_proposed_changes,
         tab=tab,
         ai_instructions=ai_instructions,
         previous=previous,

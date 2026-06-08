@@ -7,6 +7,7 @@ import re
 from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -62,7 +63,8 @@ async def get_summary(
         project_id=normalized_project_id,
     )
 
-    analysis = run_summary_analysis(
+    analysis = await run_in_threadpool(
+        run_summary_analysis,
         TenderAnalysisRequest(
             user_id=normalized_user_id,
             project_id=normalized_project_id,

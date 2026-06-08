@@ -218,22 +218,52 @@ class RAGService:
         Returns:
             Tuple of (context_string, source_filenames)
         """
+        return self.retrieve_contexts(
+            queries=[query],
+            user_id=user_id,
+            project_id=project_id,
+            top_k=top_k,
+        )[0]
+
+    def retrieve_contexts(
+        self,
+        queries: List[str],
+        user_id: str,
+        project_id: str,
+        top_k: int = None,
+    ) -> List[Tuple[str, List[str]]]:
+        """
+        Retrieve relevant contexts for multiple queries with one embedding batch
+        and one bounded keyword payload scan.
+        """
         if top_k is None:
             top_k = settings.top_k_documents
-        
-        # Embed query
-        query_embedding = self.embeddings_service.embed_text(query, normalize=True)
+
+        normalized_queries = [str(query or "").strip() for query in queries]
+        if not normalized_queries:
+            return []
+
+        contexts: List[Tuple[str, List[str]]] = [
+            ("", []) for _query in normalized_queries
+        ]
+        indexed_queries = [
+            (index, query)
+            for index, query in enumerate(normalized_queries)
+            if query
+        ]
+
+        if not indexed_queries:
+            return contexts
+
+        query_texts = [query for _index, query in indexed_queries]
+        query_embeddings = self.embeddings_service.embed_texts(
+            query_texts,
+            normalize=True,
+        )
 
         candidate_limit = max(
             top_k,
             top_k * max(settings.hybrid_candidate_multiplier, 1),
-        )
-
-        vector_results = self.qdrant_service.search(
-            query_embedding=query_embedding,
-            user_id=user_id,
-            project_id=project_id,
-            top_k=candidate_limit
         )
 
         keyword_candidates = []
@@ -246,14 +276,32 @@ class RAGService:
         except Exception:
             keyword_candidates = []
 
-        results = self._rerank_hybrid_results(
-            query=query,
-            vector_results=vector_results,
-            keyword_candidates=keyword_candidates,
-            top_k=top_k,
-        )
+        for (query_index, query), query_embedding in zip(
+            indexed_queries,
+            query_embeddings,
+        ):
+            vector_results = self.qdrant_service.search(
+                query_embedding=query_embedding,
+                user_id=user_id,
+                project_id=project_id,
+                top_k=candidate_limit
+            )
 
-        # Extract context and sources
+            results = self._rerank_hybrid_results(
+                query=query,
+                vector_results=vector_results,
+                keyword_candidates=keyword_candidates,
+                top_k=top_k,
+            )
+
+            contexts[query_index] = self._build_context_from_results(results)
+
+        return contexts
+
+    def _build_context_from_results(
+        self,
+        results: List[Dict[str, Any]],
+    ) -> Tuple[str, List[str]]:
         context_parts = []
         sources = []
 
@@ -450,7 +498,7 @@ class RAGService:
         query: str,
         user_id: str,
         project_id: str,
-        db: Session
+        db: Session = None,
     ) -> Tuple[str, List[str]]:
         """
         Generate a chat response using RAG.

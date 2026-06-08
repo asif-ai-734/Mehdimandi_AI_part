@@ -4,6 +4,7 @@ Handles chat requests with document context retrieval.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import ChatHistory
@@ -110,7 +111,8 @@ async def chat(
         rag_service = get_rag_service()
 
         if page:
-            response_text, sources = rag_service.generate_page_chat_response(
+            response_text, sources = await run_in_threadpool(
+                rag_service.generate_page_chat_response,
                 query=chat_request.message,
                 user_id=user_id,
                 project_id=project_id,
@@ -119,11 +121,11 @@ async def chat(
             )
         else:
             # Generate response with context from documents
-            response_text, sources = rag_service.generate_chat_response(
+            response_text, sources = await run_in_threadpool(
+                rag_service.generate_chat_response,
                 query=chat_request.message,
                 user_id=user_id,
                 project_id=project_id,
-                db=db
             )
         
         # Save to chat history

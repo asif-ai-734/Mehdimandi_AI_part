@@ -119,14 +119,12 @@ def build_risk_context(
 
     contexts = []
 
-    for query in queries:
-        context, _sources = rag_service.retrieve_context(
-            query=query,
-            user_id=user_id,
-            project_id=project_id,
-            top_k=8,
-        )
-
+    for context, _sources in rag_service.retrieve_contexts(
+        queries=queries,
+        user_id=user_id,
+        project_id=project_id,
+        top_k=8,
+    ):
         if context:
             contexts.append(context)
 
