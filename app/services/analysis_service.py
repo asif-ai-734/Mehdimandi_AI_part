@@ -443,6 +443,11 @@ def format_payload_source(payload: Dict[str, Any]) -> str:
         parts.append(f"project {stringify(payload.get('project_name'))}")
     if payload.get("project_address"):
         parts.append(f"address {stringify(payload.get('project_address'))}")
+    page_no = payload.get("page_no")
+    if page_no is None:
+        page_no = payload.get("page")
+    if page_no is not None and stringify(page_no):
+        parts.append(f"page {stringify(page_no)}")
     if payload.get("chunk_index") is not None:
         parts.append(f"chunk {payload['chunk_index']}")
     if payload.get("chunk_type"):

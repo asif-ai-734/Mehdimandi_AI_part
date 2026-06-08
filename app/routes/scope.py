@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Document
 from app.schemas.scope import ScopeFilter, ScopeItem, ScopeOfWorkResponse
+from app.services.analysis_rules_service import merge_analysis_rules
 from app.services.scope_service import get_scope_service
 from app.utils.analysis_inputs import has_valid_division_code, normalize_divisions
 from app.utils.scopes import is_valid_scope_value, normalize_scope_value
@@ -86,7 +87,12 @@ def get_saved_scope_inputs(
         if divisions and instructions:
             break
 
-    return divisions, instructions
+    return divisions, merge_analysis_rules(
+        db=db,
+        user_id=user_id,
+        instructions=instructions,
+        section="scope",
+    )
 
 
 def run_scope_analysis(
@@ -107,10 +113,10 @@ def run_scope_analysis(
             detail="At least one valid division code must be selected",
         )
 
-    if len(instructions) > 5000:
+    if len(instructions) > 15000:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Instructions are too long (max 5000 characters)",
+            detail="Instructions are too long (max 15000 characters)",
         )
 
     try:
@@ -165,15 +171,15 @@ def build_scope_filters(items: List[ScopeItem]) -> List[ScopeFilter]:
     seen = set()
 
     for item in items:
-        if item.division_code in seen:
+        if item.division in seen:
             continue
 
-        seen.add(item.division_code)
+        seen.add(item.division)
 
         filters.append(
             ScopeFilter(
-                code=item.division_code,
-                label=f"Div {item.division_code}",
+                code=item.division,
+                label=f"Div {item.division}",
                 active=False,
             )
         )

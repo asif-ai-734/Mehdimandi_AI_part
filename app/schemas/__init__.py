@@ -66,6 +66,8 @@ class ChatRequest(BaseModel):
     user_id: str
     project_id: str
     message: str
+    page: Optional[str] = None
+    page_json: Optional[Any] = None
 
 
 class ChatResponse(BaseModel):

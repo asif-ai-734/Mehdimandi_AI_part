@@ -1,6 +1,6 @@
 """
 SQLAlchemy models for the RAG system.
-Defines Document and ChatHistory models.
+Defines Document, ChatHistory, and user analysis-rule models.
 """
 
 from datetime import datetime
@@ -42,3 +42,18 @@ class ChatHistory(Base):
     assistant_response = Column(Text)
     sources = Column(Text, nullable=True)  # JSON list of source filenames
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AnalysisRules(Base):
+    """User-level AI analysis rules applied across analysis screens."""
+    __tablename__ = "analysis_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(255), unique=True, index=True, nullable=False)
+    general_instructions = Column(Text, default="", nullable=False)
+    pricing_specific_instructions = Column(Text, default="", nullable=False)
+    scope_analysis_instructions = Column(Text, default="", nullable=False)
+    assumptions_instructions = Column(Text, default="", nullable=False)
+    exclusions_instructions = Column(Text, default="", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

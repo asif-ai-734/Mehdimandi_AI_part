@@ -3,8 +3,17 @@ File extraction service for PDF, DOCX, and TXT files.
 """
 
 import os
-from typing import Optional
+from dataclasses import dataclass
+from typing import List, Optional
 import mimetypes
+
+
+@dataclass
+class ExtractedTextSection:
+    """Extracted text with optional source page metadata."""
+
+    text: str
+    page_no: Optional[int] = None
 
 
 def extract_text_from_txt(file_path: str) -> str:
@@ -19,22 +28,31 @@ def extract_text_from_txt(file_path: str) -> str:
 
 def extract_text_from_pdf(file_path: str) -> str:
     """Extract text from a PDF file."""
+    return "\n".join(section.text for section in extract_text_sections_from_pdf(file_path))
+
+
+def extract_text_sections_from_pdf(file_path: str) -> List[ExtractedTextSection]:
+    """Extract text from a PDF file, preserving one-based page numbers."""
     try:
         import PyPDF2
     except ImportError:
         raise ImportError("PyPDF2 is required to extract text from PDF files")
     
-    text = []
+    sections = []
     try:
         with open(file_path, 'rb') as pdf_file:
             pdf_reader = PyPDF2.PdfReader(pdf_file)
-            for page_num in range(len(pdf_reader.pages)):
-                page = pdf_reader.pages[page_num]
-                text.append(page.extract_text() or "")
+            for page_num, page in enumerate(pdf_reader.pages, start=1):
+                sections.append(
+                    ExtractedTextSection(
+                        text=page.extract_text() or "",
+                        page_no=page_num,
+                    )
+                )
     except Exception as e:
         raise ValueError(f"Error extracting text from PDF: {str(e)}")
     
-    return "\n".join(text)
+    return sections
 
 
 def get_page_count(file_path: str, file_type: str) -> Optional[int]:
@@ -101,12 +119,21 @@ def extract_text(file_path: str, file_type: str) -> str:
     """
     file_type = file_type.lower().strip('.')
     
+    return "\n".join(section.text for section in extract_text_sections(file_path, file_type))
+
+
+def extract_text_sections(file_path: str, file_type: str) -> List[ExtractedTextSection]:
+    """
+    Extract text sections from a file, preserving page metadata when available.
+    """
+    file_type = file_type.lower().strip('.')
+
     if file_type == "txt":
-        return extract_text_from_txt(file_path)
+        return [ExtractedTextSection(text=extract_text_from_txt(file_path))]
     elif file_type == "pdf":
-        return extract_text_from_pdf(file_path)
+        return extract_text_sections_from_pdf(file_path)
     elif file_type == "docx":
-        return extract_text_from_docx(file_path)
+        return [ExtractedTextSection(text=extract_text_from_docx(file_path))]
     else:
         raise ValueError(f"Unsupported file type: {file_type}")
 

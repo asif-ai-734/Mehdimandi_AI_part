@@ -136,6 +136,45 @@ Please answer based only on the context provided above."""
         except Exception as e:
             raise RuntimeError(f"Error generating response from OpenAI: {str(e)}")
 
+    def generate_page_response(
+        self,
+        query: str,
+        page: str,
+        page_context: str,
+        system_prompt: str,
+        temperature: float = 0.3,
+        max_tokens: int = 1000
+    ) -> str:
+        """
+        Generate a response using the JSON context for the current UI page.
+        """
+        self.refresh_from_settings()
+
+        user_message = f"""Current page: {page}
+
+Current page JSON:
+{page_context}
+
+User question: {query}
+
+Answer based only on the current page JSON and the current page rules."""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message}
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+
+            return response.choices[0].message.content
+
+        except Exception as e:
+            raise RuntimeError(f"Error generating page response from OpenAI: {str(e)}")
+
     def generate_json(
         self,
         messages: List[Dict[str, Any]],

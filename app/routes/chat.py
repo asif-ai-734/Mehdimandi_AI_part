@@ -16,6 +16,18 @@ import logging
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
+SUPPORTED_CHAT_PAGES = {
+    "summary",
+    "scope",
+    "pricing",
+    "risks",
+    "clarifications",
+    "assumptions",
+    "exclusions",
+    "addenda",
+    "quote_draft",
+}
+
 
 @router.post("", response_model=ChatResponse)
 async def chat(
@@ -65,18 +77,54 @@ async def chat(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Message is too long (max 5000 characters)"
         )
+
+    page = (chat_request.page or "").strip().lower()
+    has_page_json = chat_request.page_json is not None
+
+    if page and page not in SUPPORTED_CHAT_PAGES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported page '{page}'"
+        )
+
+    if page and not has_page_json:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="page_json is required when page is provided"
+        )
+
+    if has_page_json and not page:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="page is required when page_json is provided"
+        )
+
+    if has_page_json and not isinstance(chat_request.page_json, (dict, list)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="page_json must be a JSON object or array"
+        )
     
     try:
         # Get RAG service
         rag_service = get_rag_service()
-        
-        # Generate response with context from documents
-        response_text, sources = rag_service.generate_chat_response(
-            query=chat_request.message,
-            user_id=user_id,
-            project_id=project_id,
-            db=db
-        )
+
+        if page:
+            response_text, sources = rag_service.generate_page_chat_response(
+                query=chat_request.message,
+                user_id=user_id,
+                project_id=project_id,
+                page=page,
+                page_json=chat_request.page_json,
+            )
+        else:
+            # Generate response with context from documents
+            response_text, sources = rag_service.generate_chat_response(
+                query=chat_request.message,
+                user_id=user_id,
+                project_id=project_id,
+                db=db
+            )
         
         # Save to chat history
         chat_history = rag_service.save_chat_history(

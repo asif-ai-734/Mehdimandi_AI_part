@@ -62,22 +62,23 @@ Required schema:
 {
   "items": [
     {
-      "title": "Interior Wood Doors",
-      "division_code": "08",
-      "division_label": "Openings",
+      "division": "08",
+      "scopeItem": "Interior Wood Doors",
       "quantity": {
         "value": 24,
         "unit": "units"
       },
-      "specifications": "Solid core birch veneer flush wood doors.",
-      "references": [
-        {
-          "code": "08 14 16",
-          "title": "Flush Wood Doors",
-          "page": 114,
-          "division": "08"
-        }
-      ]
+      "include": true,
+      "notes": "Solid core birch veneer flush wood doors.",
+      "source": {
+        "document": "08 14 16 Flush Wood Doors",
+        "page": 114
+      },
+      "actions": {
+        "canEdit": true,
+        "canDuplicate": true,
+        "canDelete": true
+      }
     }
   ]
 }
@@ -339,7 +340,7 @@ def build_scope_keyword_terms(
 def normalize_scope_extraction_response(payload: Dict[str, Any]) -> Dict[str, Any]:
     items = []
 
-    for index, raw_item in enumerate(ensure_list(payload.get("items")), start=1):
+    for raw_item in ensure_list(payload.get("items")):
         if not isinstance(raw_item, dict):
             continue
 
@@ -348,26 +349,67 @@ def normalize_scope_extraction_response(payload: Dict[str, Any]) -> Dict[str, An
         if not isinstance(quantity, dict):
             quantity = {}
 
-        division_code = normalize_division_code(raw_item.get("division_code")) or "00"
+        division_code = normalize_division_code(
+            raw_item.get("division") or raw_item.get("division_code")
+        ) or "00"
+        source = raw_item.get("source")
+
+        if not isinstance(source, dict):
+            source = {}
+
+        references = [
+            reference
+            for reference in ensure_list(raw_item.get("references"))
+            if isinstance(reference, dict)
+        ]
+        first_reference = references[0] if references else {}
+        actions = raw_item.get("actions")
+
+        if not isinstance(actions, dict):
+            actions = {}
 
         items.append(
             {
-                "id": index,
-                "title": stringify(raw_item.get("title")) or "Untitled Scope Item",
-                "division_code": division_code,
-                "division_label": stringify(raw_item.get("division_label"))
-                or CSI_DIVISIONS.get(division_code, f"Division {division_code}"),
+                "division": division_code,
+                "scopeItem": stringify(raw_item.get("scopeItem"))
+                or stringify(raw_item.get("scope_item"))
+                or stringify(raw_item.get("title"))
+                or "Untitled Scope Item",
                 "quantity": {
                     "value": parse_float(quantity.get("value")),
                     "unit": stringify(quantity.get("unit")) or "unspecified",
                 },
-                "specifications": stringify(raw_item.get("specifications"))
-                or "No specifications found.",
-                "references": [
-                    normalize_scope_reference(reference)
-                    for reference in ensure_list(raw_item.get("references"))
-                    if isinstance(reference, dict)
-                ],
+                "include": parse_bool(raw_item.get("include"), default=True),
+                "notes": stringify(raw_item.get("notes"))
+                or stringify(raw_item.get("specifications"))
+                or "No notes found.",
+                "source": {
+                    "document": stringify(source.get("document"))
+                    or stringify(raw_item.get("document"))
+                    or stringify(first_reference.get("document"))
+                    or stringify(first_reference.get("title"))
+                    or stringify(first_reference.get("code"))
+                    or "Not found",
+                    "page": parse_optional_int(
+                        source.get("page")
+                        if source.get("page") is not None
+                        else first_reference.get("page")
+                    ),
+                },
+                "actions": {
+                    "canEdit": parse_bool(
+                        actions.get("canEdit", actions.get("can_edit")),
+                        default=True,
+                    ),
+                    "canDuplicate": parse_bool(
+                        actions.get("canDuplicate", actions.get("can_duplicate")),
+                        default=True,
+                    ),
+                    "canDelete": parse_bool(
+                        actions.get("canDelete", actions.get("can_delete")),
+                        default=True,
+                    ),
+                },
             }
         )
 
@@ -463,6 +505,12 @@ def format_payload_source(payload: Dict[str, Any]) -> str:
     if payload.get("project_address"):
         parts.append(f"address {stringify(payload.get('project_address'))}")
 
+    page_no = payload.get("page_no")
+    if page_no is None:
+        page_no = payload.get("page")
+    if page_no is not None and stringify(page_no):
+        parts.append(f"page {stringify(page_no)}")
+
     if payload.get("chunk_index") is not None:
         parts.append(f"chunk {payload['chunk_index']}")
 
@@ -531,13 +579,32 @@ def normalize_division_code(value: Any) -> str:
     return match.group(0).zfill(2)
 
 
-def parse_float(value: Any) -> float:
+def parse_float(value: Any) -> int | float:
     match = re.search(r"\d+(\.\d+)?", str(value or ""))
 
     if not match:
         return 0.0
 
-    return float(match.group(0))
+    text = match.group(0)
+    if "." not in text:
+        return int(text)
+
+    return float(text)
+
+
+def parse_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    text = stringify(value).lower()
+
+    if text in {"true", "1", "yes", "y"}:
+        return True
+
+    if text in {"false", "0", "no", "n"}:
+        return False
+
+    return default
 
 
 def parse_optional_int(value: Any) -> Optional[int]:

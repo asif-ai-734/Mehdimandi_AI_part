@@ -10,11 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Document
-from app.schemas.pricing import (
-    PricingFilter,
-    PricingImpactItem,
-    PricingImpactsResponse,
-)
+from app.schemas.pricing import PricingImpactsResponse
+from app.services.analysis_rules_service import merge_analysis_rules
 from app.services.pricing_service import get_pricing_service
 from app.utils.analysis_inputs import has_valid_division_code, normalize_divisions
 from app.utils.scopes import (
@@ -99,7 +96,12 @@ def get_saved_pricing_inputs(
         if divisions and instructions:
             break
 
-    return divisions, instructions
+    return divisions, merge_analysis_rules(
+        db=db,
+        user_id=user_id,
+        instructions=instructions,
+        section="pricing",
+    )
 
 
 def run_pricing_analysis(
@@ -123,10 +125,10 @@ def run_pricing_analysis(
             detail="At least one valid division code must be selected",
         )
 
-    if len(instructions) > 5000:
+    if len(instructions) > 15000:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Instructions are too long (max 5000 characters)",
+            detail="Instructions are too long (max 15000 characters)",
         )
 
     try:
@@ -160,38 +162,4 @@ def build_pricing_response(
     """
     Convert pricing payload into frontend response shape.
     """
-    items = [
-        PricingImpactItem.model_validate(item)
-        for item in payload.get("items", [])
-        if isinstance(item, dict)
-    ]
-
-    return PricingImpactsResponse(
-        total_items=len(items),
-        showing=f"{len(items)} of {len(items)}",
-        filters=build_pricing_filters(items),
-        items=items,
-    )
-
-
-def build_pricing_filters(
-    items: List[PricingImpactItem],
-) -> List[PricingFilter]:
-    """
-    Build pricing filters.
-
-    For now only "All Pricing" exists.
-    Later you can add:
-    - allowances
-    - schedule
-    - logistics
-    - risk
-    - addenda
-    """
-    return [
-        PricingFilter(
-            code="all",
-            label="All Pricing",
-            active=True,
-        )
-    ]
+    return PricingImpactsResponse.model_validate(payload)

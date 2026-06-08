@@ -1,14 +1,18 @@
 """
-Pricing impacts extraction service.
+Pricing extraction service.
 
 Uses the existing project RAG index as context and asks OpenAI for structured
-pricing impact items for the pricing screen.
+pricing information for the pricing screen.
 """
 
 import json
 import re
 from typing import Any, Dict, List, Optional
 
+from app.schemas.pricing import (
+    normalize_fixed_additional_cost_items,
+    normalize_fixed_pricing_basis,
+)
 from app.services.openai_service import get_openai_service
 from app.services.rag_service import get_rag_service
 
@@ -41,7 +45,7 @@ CSI_DIVISIONS = {
 }
 
 
-PRICING_IMPACTS_SYSTEM_PROMPT = """You are an expert construction estimator.
+LEGACY_PRICING_IMPACTS_SYSTEM_PROMPT = """You are an expert construction estimator.
 
 Extract pricing impacts ONLY from the provided tender context.
 
@@ -76,6 +80,104 @@ Required schema:
         "page": 8,
         "section": "4.2 Working Hours"
       }
+    }
+  ]
+}
+"""
+
+PRICING_IMPACTS_SYSTEM_PROMPT = """You are an expert construction estimator.
+
+Extract pricing information ONLY from the provided tender context.
+
+Pricing information can include draft estimate amounts, division breakdowns,
+clauses, requirements, risks, conditions, schedules, addenda, allowances,
+alternates, bonds, warranties, logistics, coordination constraints, or scope
+requirements that may affect bid price.
+
+Rules:
+- Use only supported information from retrieved context.
+- Focus on selected CSI divisions and estimator instructions.
+- Do not invent project facts.
+- Do not invent unsupported dollar values.
+- If a cost amount is explicitly supported, return it as a number.
+- If a cost category is supported but the amount is missing, use null for amount.
+- If no final estimator price is provided, use null for estimatorFinalPrice and variance.
+- Keep names and titles short.
+- Keep descriptions concise.
+- Missing information should list pricing blockers or gaps.
+- Severity must be one of: critical, warning, info.
+- additionalCostItems must always contain exactly these four categories in this order:
+  Bonds, Insurance, Coordination, Contingency.
+- Use null for a category amount when the tender context does not support a value.
+- pricingBasisAndReasoning must use the same four categories in the same order:
+  Bonds, Insurance, Coordination, Contingency.
+- Pricing basis and reasoning should explain what each fixed category relies on.
+- Return JSON only. Do not include markdown.
+
+Required schema:
+{
+  "comparison": {
+    "aiDraftEstimate": 485000,
+    "estimatorFinalPrice": null,
+    "variance": null
+  },
+  "aiDraftEstimateBreakdown": [
+    {
+      "division": "01",
+      "name": "General Requirements",
+      "amount": 72750,
+      "editable": true
+    }
+  ],
+  "additionalCostItems": [
+    {
+      "name": "Bonds",
+      "description": "Performance and payment bond requirements",
+      "amount": 24250,
+      "editable": true
+    },
+    {
+      "name": "Insurance",
+      "description": "Liability and builder's risk insurance requirements",
+      "amount": null,
+      "editable": true
+    },
+    {
+      "name": "Coordination",
+      "description": "Site meetings, scheduling, RFIs, and project coordination",
+      "amount": 15000,
+      "editable": true
+    },
+    {
+      "name": "Contingency",
+      "description": "Risk buffer for pricing uncertainty",
+      "amount": 24250,
+      "editable": true
+    }
+  ],
+  "missingInformation": [
+    {
+      "title": "Supplier quotes missing",
+      "description": "Door hardware and window frame pricing not confirmed with suppliers",
+      "severity": "critical"
+    }
+  ],
+  "pricingBasisAndReasoning": [
+    {
+      "title": "Bonds",
+      "description": "Based on bond requirements identified in the tender context"
+    },
+    {
+      "title": "Insurance",
+      "description": "Based on insurance coverage requirements identified in the tender context"
+    },
+    {
+      "title": "Coordination",
+      "description": "Based on coordination, scheduling, and RFI requirements identified in the tender context"
+    },
+    {
+      "title": "Contingency",
+      "description": "Based on documented pricing uncertainty and risk allowances in the tender context"
     }
   ]
 }
@@ -358,37 +460,167 @@ def build_pricing_keyword_terms(
 
 
 def normalize_pricing_impacts_response(payload: Dict[str, Any]) -> Dict[str, Any]:
+    comparison = payload.get("comparison")
+
+    if not isinstance(comparison, dict):
+        comparison = {}
+
+    comparison = {
+        "aiDraftEstimate": comparison.get("aiDraftEstimate")
+        if "aiDraftEstimate" in comparison
+        else payload.get("aiDraftEstimate"),
+        "estimatorFinalPrice": comparison.get("estimatorFinalPrice")
+        if "estimatorFinalPrice" in comparison
+        else payload.get("estimatorFinalPrice"),
+        "variance": comparison.get("variance")
+        if "variance" in comparison
+        else payload.get("variance"),
+    }
+
+    breakdown = normalize_pricing_breakdown(
+        first_list(
+            payload.get("aiDraftEstimateBreakdown"),
+            payload.get("ai_draft_estimate_breakdown"),
+            payload.get("division_breakdown"),
+        )
+    )
+    raw_additional_costs = first_list(
+        payload.get("additionalCostItems"),
+        payload.get("additional_cost_items"),
+        payload.get("additional_costs"),
+        payload.get("items"),
+    )
+    additional_costs = normalize_fixed_additional_cost_items(raw_additional_costs)
+    missing_information = normalize_missing_information(
+        first_list(
+            payload.get("missingInformation"),
+            payload.get("missing_information"),
+        )
+    )
+    raw_pricing_basis = first_list(
+        payload.get("pricingBasisAndReasoning"),
+        payload.get("pricing_basis_and_reasoning"),
+        payload.get("pricing_basis"),
+    )
+    pricing_basis = normalize_fixed_pricing_basis(
+        raw_pricing_basis,
+        additional_costs,
+    )
+
+    return {
+        "comparison": comparison,
+        "aiDraftEstimateBreakdown": breakdown,
+        "additionalCostItems": additional_costs,
+        "missingInformation": missing_information,
+        "pricingBasisAndReasoning": pricing_basis,
+    }
+
+
+def normalize_pricing_breakdown(values: List[Any]) -> List[Dict[str, Any]]:
     items = []
 
-    for index, raw_item in enumerate(ensure_list(payload.get("items")), start=1):
+    for raw_item in values:
         if not isinstance(raw_item, dict):
             continue
 
-        reference = raw_item.get("reference")
+        division = raw_item.get("division") or raw_item.get("division_code")
+        code = normalize_division_code(division)
 
-        if not isinstance(reference, dict):
-            reference = {}
-
-        title = stringify(raw_item.get("title"))
-        description = stringify(raw_item.get("description"))
-        impact = stringify(raw_item.get("impact"))
-        amount = stringify(raw_item.get("amount"))
-
-        if not title and not description and not impact:
+        if not code:
             continue
 
         items.append(
             {
-                "id": index,
-                "title": title or "Untitled Pricing Impact",
-                "description": description or "No description found.",
-                "impact": impact or "Pricing impact not specified.",
-                "amount": amount or "Not found",
-                "reference": normalize_pricing_reference(reference),
+                "division": code,
+                "name": stringify(raw_item.get("name"))
+                or stringify(raw_item.get("division_label"))
+                or CSI_DIVISIONS.get(code, f"Division {code}"),
+                "amount": raw_item.get("amount"),
+                "editable": parse_bool(raw_item.get("editable"), default=True),
             }
         )
 
-    return {"items": items}
+    return items
+
+
+def normalize_additional_cost_items(values: List[Any]) -> List[Dict[str, Any]]:
+    items = []
+
+    for raw_item in values:
+        if not isinstance(raw_item, dict):
+            continue
+
+        name = stringify(raw_item.get("name")) or stringify(raw_item.get("title"))
+        description = stringify(raw_item.get("description"))
+        impact = stringify(raw_item.get("impact"))
+
+        if not name and not description and not impact:
+            continue
+
+        if not description:
+            description = impact or "No description found."
+        elif impact and impact not in description:
+            description = f"{description} {impact}"
+
+        items.append(
+            {
+                "name": name or "Untitled Cost Item",
+                "description": description,
+                "amount": raw_item.get("amount"),
+                "editable": parse_bool(raw_item.get("editable"), default=True),
+            }
+        )
+
+    return items
+
+
+def normalize_missing_information(values: List[Any]) -> List[Dict[str, Any]]:
+    items = []
+
+    for raw_item in values:
+        if not isinstance(raw_item, dict):
+            continue
+
+        title = stringify(raw_item.get("title"))
+        description = stringify(raw_item.get("description"))
+
+        if not title and not description:
+            continue
+
+        items.append(
+            {
+                "title": title or "Missing information",
+                "description": description
+                or "Pricing information is not confirmed.",
+                "severity": normalize_severity(raw_item.get("severity")),
+            }
+        )
+
+    return items
+
+
+def normalize_pricing_basis(values: List[Any]) -> List[Dict[str, str]]:
+    items = []
+
+    for raw_item in values:
+        if not isinstance(raw_item, dict):
+            continue
+
+        title = stringify(raw_item.get("title"))
+        description = stringify(raw_item.get("description"))
+
+        if not title and not description:
+            continue
+
+        items.append(
+            {
+                "title": title or "Pricing Basis",
+                "description": description
+                or "Based on pricing information extracted from tender documents.",
+            }
+        )
+
+    return items
 
 
 def normalize_pricing_reference(value: Dict[str, Any]) -> Dict[str, Any]:
@@ -397,6 +629,44 @@ def normalize_pricing_reference(value: Dict[str, Any]) -> Dict[str, Any]:
         "page": parse_optional_int(value.get("page")),
         "section": stringify(value.get("section")) or None,
     }
+
+
+def first_list(*values: Any) -> List[Any]:
+    for value in values:
+        if isinstance(value, list):
+            return value
+
+    return []
+
+
+def parse_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    text = stringify(value).lower()
+
+    if text in {"true", "1", "yes", "y"}:
+        return True
+
+    if text in {"false", "0", "no", "n"}:
+        return False
+
+    return default
+
+
+def normalize_severity(value: Any) -> str:
+    text = stringify(value).lower()
+
+    if text in {"critical", "high"}:
+        return "critical"
+
+    if text in {"medium", "warning"}:
+        return "warning"
+
+    if text in {"low", "info", "informational"}:
+        return "info"
+
+    return "warning"
 
 
 def top_keyword_candidates(
@@ -476,6 +746,12 @@ def format_payload_source(payload: Dict[str, Any]) -> str:
 
     if payload.get("project_address"):
         parts.append(f"address {stringify(payload.get('project_address'))}")
+
+    page_no = payload.get("page_no")
+    if page_no is None:
+        page_no = payload.get("page")
+    if page_no is not None and stringify(page_no):
+        parts.append(f"page {stringify(page_no)}")
 
     if payload.get("chunk_index") is not None:
         parts.append(f"chunk {payload['chunk_index']}")

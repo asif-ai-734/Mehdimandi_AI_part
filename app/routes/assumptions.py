@@ -15,6 +15,7 @@ from app.schemas.assumptions import (
     AssumptionItem,
     AssumptionsResponse,
 )
+from app.services.analysis_rules_service import merge_analysis_rules
 from app.services.assumptions_service import get_assumptions_service
 from app.utils.analysis_inputs import has_valid_division_code, normalize_divisions
 from app.utils.scopes import is_valid_scope_value, normalize_scope_value
@@ -90,7 +91,12 @@ def get_saved_assumption_inputs(
         if divisions and instructions:
             break
 
-    return divisions, instructions
+    return divisions, merge_analysis_rules(
+        db=db,
+        user_id=user_id,
+        instructions=instructions,
+        section="assumptions",
+    )
 
 
 def run_assumptions_analysis(
@@ -111,10 +117,10 @@ def run_assumptions_analysis(
             detail="At least one valid division code must be selected",
         )
 
-    if len(instructions) > 5000:
+    if len(instructions) > 15000:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Instructions are too long (max 5000 characters)",
+            detail="Instructions are too long (max 15000 characters)",
         )
 
     try:

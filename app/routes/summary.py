@@ -18,6 +18,7 @@ from app.schemas import (
     TenderAnalysisRequest,
     TenderAnalysisResponse,
 )
+from app.services.analysis_rules_service import merge_analysis_rules
 from app.services.analysis_service import get_analysis_service
 from app.utils.analysis_inputs import has_valid_division_code, normalize_divisions
 from app.utils.scopes import is_valid_scope_value, normalize_scope_value
@@ -99,7 +100,16 @@ def get_saved_summary_inputs(
         if divisions and instructions:
             break
 
-    return divisions, instructions, len(documents)
+    return (
+        divisions,
+        merge_analysis_rules(
+            db=db,
+            user_id=user_id,
+            instructions=instructions,
+            section="summary",
+        ),
+        len(documents),
+    )
 
 
 def run_summary_analysis(request: TenderAnalysisRequest) -> TenderAnalysisResponse:
@@ -131,10 +141,10 @@ def run_summary_analysis(request: TenderAnalysisRequest) -> TenderAnalysisRespon
             detail="At least one valid division code must be selected",
         )
 
-    if len(request.instructions) > 5000:
+    if len(request.instructions) > 15000:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Instructions are too long (max 5000 characters)",
+            detail="Instructions are too long (max 15000 characters)",
         )
 
     try:

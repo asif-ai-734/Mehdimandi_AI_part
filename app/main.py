@@ -19,9 +19,12 @@ from app.routes.clarifications import router as clarifications_router
 from app.routes.assumptions import router as assumptions_router
 from app.routes.exclusions import router as exclusions_router
 from app.routes.addenda import router as addenda_router
+from app.routes.analysis_rules import router as analysis_rules_router
 from app.routes.quote_draft import router as quote_draft_router
 from app.routes.resources import router as resources_router
+from app.routes.section_reanalysis import router as section_reanalysis_router
 from app.routes.system import router as system_router
+from app.routes.admin import router as admin_router
 from app.services.embeddings import get_embeddings_service
 from app.services.qdrant_service import get_qdrant_service
 import logging
@@ -82,17 +85,20 @@ app.add_middleware(
 
 app.include_router(system_router)
 app.include_router(documents.router)
-# app.include_router(chat.router)
+#app.include_router(chat.router)
+app.include_router(analysis_rules_router)
 app.include_router(summary.router)
 app.include_router(scope_router)
 app.include_router(pricing_router)
 app.include_router(risks_router)
 app.include_router(clarifications_router)
 app.include_router(assumptions_router)
+app.include_router(section_reanalysis_router)
 app.include_router(exclusions_router)
 app.include_router(addenda_router)
 app.include_router(quote_draft_router)
 app.include_router(resources_router)
+app.include_router(admin_router)
 
 
 

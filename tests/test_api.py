@@ -13,10 +13,17 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import get_db
 from app.main import app
-from app.models import Base, ChatHistory, Document
+from app.models import AnalysisRules, Base, ChatHistory, Document
 from app.routes import chat as chat_routes
 from app.routes import documents as document_routes
+from app.routes import pricing as pricing_routes
+from app.routes import scope as scope_routes
+from app.routes import section_reanalysis as section_reanalysis_routes
 from app.routes import summary as summary_routes
+from app.schemas.section_reanalysis import ProposedChanges
+from app.services import rag_service as rag_service_module
+from app.services.file_extractor import ExtractedTextSection
+from app.services.rag_service import RAGService
 
 
 SQLALCHEMY_DATABASE_URL = "sqlite://"
@@ -45,6 +52,9 @@ def override_get_db():
 class FakeRagService:
     """Small test double for document processing and chat persistence."""
 
+    def __init__(self):
+        self.last_page_chat_request = None
+
     def process_document(
         self,
         file_path,
@@ -66,6 +76,16 @@ class FakeRagService:
 
     def generate_chat_response(self, query, user_id, project_id, db):
         return f"Answer for: {query}", ["source.txt"]
+
+    def generate_page_chat_response(self, query, user_id, project_id, page, page_json):
+        self.last_page_chat_request = {
+            "query": query,
+            "user_id": user_id,
+            "project_id": project_id,
+            "page": page,
+            "page_json": page_json,
+        }
+        return f"{page} page answer for: {query}", [f"page_json:{page}"]
 
     def save_chat_history(
         self,
@@ -152,6 +172,76 @@ class FakeAnalysisService:
         }
 
 
+class FakeScopeService:
+    """Small test double for scope re-analysis."""
+
+    def __init__(self):
+        self.instructions = []
+
+    def extract_scope_of_work(self, user_id, project_id, divisions, instructions):
+        self.instructions.append(instructions)
+        items = [
+            {
+                "id": 1,
+                "title": "Install doors",
+                "division_code": "08",
+                "division_label": "Openings",
+                "quantity": {"value": 12, "unit": "ea"},
+                "specifications": "Door installation scope.",
+                "references": [{"code": "08 10 00", "title": "Doors", "page": 4}],
+            }
+        ]
+
+        if "Exclude painting" not in instructions:
+            items.append(
+                {
+                    "id": 2,
+                    "title": "Paint doors",
+                    "division_code": "09",
+                    "division_label": "Finishes",
+                    "quantity": {"value": 12, "unit": "ea"},
+                    "specifications": "Painting scope.",
+                    "references": [
+                        {"code": "09 90 00", "title": "Painting", "page": 8}
+                    ],
+                }
+            )
+
+        return {"items": items}
+
+
+class FakeSectionReanalysisService:
+    """Small test double for proposed-change generation."""
+
+    def build_proposed_changes(self, tab, ai_instructions, previous, updated):
+        return ProposedChanges(
+            changes_label="Scope Changes",
+            changes=["Remove painting scope items"],
+            pricing_impact="Review Division 09 pricing impact",
+            affected_tabs=["Scope", "Pricing", "Exclusions"],
+        )
+
+
+class FakeQuery:
+    """Small query object for tests that do not need a stored document row."""
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def first(self):
+        return None
+
+
+class FakeDbSession:
+    """Small DB object for RAG metadata tests."""
+
+    def query(self, *args, **kwargs):
+        return FakeQuery()
+
+    def commit(self):
+        pass
+
+
 @pytest.fixture(scope="function")
 def setup_db():
     """Create test database before each test."""
@@ -177,6 +267,7 @@ def fake_rag_service(monkeypatch, tmp_path):
     monkeypatch.setattr(chat_routes, "get_rag_service", lambda: fake_service)
     monkeypatch.setattr(document_routes, "get_rag_service", lambda: fake_service)
     monkeypatch.setattr(document_routes.settings, "upload_dir", str(tmp_path))
+    return fake_service
 
 
 @pytest.fixture
@@ -326,6 +417,484 @@ class TestChat:
         history = history_response.json()
         assert history["total_messages"] == 1
         assert history["messages"][0]["id"] == data["id"]
+
+    def test_chat_accepts_page_json_context(self, client, fake_rag_service):
+        """Test chat can answer from the current page JSON."""
+        page_json = {
+            "title": "Scope of Work",
+            "total_items": 1,
+            "items": [
+                {
+                    "id": 1,
+                    "title": "Install doors",
+                    "division_code": "08",
+                    "quantity": {"value": 12, "unit": "ea"},
+                }
+            ],
+        }
+
+        chat_response = client.post(
+            "/chat",
+            json={
+                "user_id": TEST_USER_ID,
+                "project_id": TEST_PROJECT_ID,
+                "page": "scope",
+                "page_json": page_json,
+                "message": "How many scope items are shown?",
+            },
+        )
+
+        assert chat_response.status_code == 200
+        data = chat_response.json()
+        assert data["assistant_response"] == (
+            "scope page answer for: How many scope items are shown?"
+        )
+        assert data["sources"] == ["page_json:scope"]
+        assert fake_rag_service.last_page_chat_request == {
+            "query": "How many scope items are shown?",
+            "user_id": TEST_USER_ID,
+            "project_id": TEST_PROJECT_ID,
+            "page": "scope",
+            "page_json": page_json,
+        }
+
+    def test_chat_requires_page_json_when_page_is_sent(self, client, fake_rag_service):
+        """Test page-scoped chat requires the current page JSON."""
+        chat_response = client.post(
+            "/chat",
+            json={
+                "user_id": TEST_USER_ID,
+                "project_id": TEST_PROJECT_ID,
+                "page": "pricing",
+                "message": "What pricing impacts are shown?",
+            },
+        )
+
+        assert chat_response.status_code == 400
+        assert chat_response.json()["detail"] == (
+            "page_json is required when page is provided"
+        )
+
+
+class TestRagMetadata:
+    """Vector metadata tests."""
+
+    def test_process_document_stores_pdf_page_numbers(self, monkeypatch):
+        """Test PDF chunks include one-based page metadata before embedding."""
+        captured = {}
+
+        class FakeEmbeddingsService:
+            def embed_texts(self, texts, normalize=True):
+                captured["texts"] = texts
+                return [[0.1, 0.2, 0.3] for _ in texts]
+
+        class FakeQdrantService:
+            def upsert_points(self, embeddings, metadatas):
+                captured["metadatas"] = metadatas
+                return ["point-1", "point-2"]
+
+        service = RAGService.__new__(RAGService)
+        service.embeddings_service = FakeEmbeddingsService()
+        service.qdrant_service = FakeQdrantService()
+
+        monkeypatch.setattr(
+            rag_service_module,
+            "extract_text_sections",
+            lambda file_path, file_type: [
+                ExtractedTextSection(text="First page scope item.", page_no=1),
+                ExtractedTextSection(text="Second page pricing note.", page_no=2),
+            ],
+        )
+        monkeypatch.setattr(
+            rag_service_module,
+            "split_text_into_chunks",
+            lambda text, chunk_size, chunk_overlap: [text],
+        )
+
+        total_chunks, error = service.process_document(
+            file_path="spec.pdf",
+            file_type="pdf",
+            document_id=1,
+            user_id=TEST_USER_ID,
+            project_id=TEST_PROJECT_ID,
+            project_name=TEST_PROJECT_NAME,
+            project_address=TEST_PROJECT_ADDRESS,
+            filename="spec.pdf",
+            db=FakeDbSession(),
+        )
+
+        assert total_chunks == 2
+        assert error == ""
+        assert captured["texts"] == [
+            "First page scope item.",
+            "Second page pricing note.",
+        ]
+        assert [metadata["page_no"] for metadata in captured["metadatas"]] == [1, 2]
+        assert [metadata["page_number"] for metadata in captured["metadatas"]] == [1, 2]
+        assert [metadata["page"] for metadata in captured["metadatas"]] == [1, 2]
+
+    def test_format_source_prefers_page_no(self):
+        """Test retrieval source labels include page metadata."""
+        source = RAGService._format_source(
+            {
+                "filename": "spec.pdf",
+                "source_type": "document",
+                "page_no": 7,
+                "chunk_type": "raw_text",
+            },
+            index=1,
+        )
+
+        assert source == "S1: spec.pdf | document | page 7 | raw_text"
+
+
+class TestSectionReanalysis:
+    """Temporary AI instruction re-analysis tests."""
+
+    def test_reanalyze_scope_returns_previous_updated_and_proposed_changes(
+        self,
+        client,
+        fake_rag_service,
+        monkeypatch,
+    ):
+        """Test section re-analysis returns current output plus proposed changes."""
+        fake_scope_service = FakeScopeService()
+        monkeypatch.setattr(scope_routes, "get_scope_service", lambda: fake_scope_service)
+        monkeypatch.setattr(
+            section_reanalysis_routes,
+            "get_section_reanalysis_service",
+            lambda: FakeSectionReanalysisService(),
+        )
+
+        upload_response = client.post(
+            "/documents/upload",
+            data={
+                "user_id": TEST_USER_ID,
+                "project_id": TEST_PROJECT_ID,
+                "project_name": TEST_PROJECT_NAME,
+                "project_address": TEST_PROJECT_ADDRESS,
+                "divisions": '["08", "09"]',
+                "instructions": "Focus on openings and finishes.",
+            },
+            files=[
+                ("files", ("spec.txt", b"base specification", "text/plain")),
+            ],
+        )
+        assert upload_response.status_code == 200
+
+        response = client.post(
+            "/analysis/reanalyze",
+            json={
+                "user_id": TEST_USER_ID,
+                "project_id": TEST_PROJECT_ID,
+                "tab": "scope",
+                "ai_instructions": "Exclude painting from scope",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["user_id"] == TEST_USER_ID
+        assert data["project_id"] == TEST_PROJECT_ID
+        assert data["tab"] == "scope"
+        assert data["previous"]["total_items"] == 2
+        assert data["updated"]["total_items"] == 1
+        assert data["updated"]["items"][0]["scopeItem"] == "Install doors"
+        assert data["proposed_changes"] == {
+            "title": "Proposed Changes",
+            "changes_label": "Scope Changes",
+            "changes": ["Remove painting scope items"],
+            "pricing_impact": "Review Division 09 pricing impact",
+            "affected_tabs": ["Scope", "Pricing", "Exclusions"],
+            "notes": None,
+        }
+        assert fake_scope_service.instructions == [
+            "Focus on openings and finishes.",
+            (
+                "Focus on openings and finishes.\n\n"
+                "Temporary AI instruction for this scope re-analysis: "
+                "Exclude painting from scope"
+            ),
+        ]
+
+
+class TestPricing:
+    """Pricing response contract tests."""
+
+    def test_build_pricing_response_returns_pricing_screen_shape(self):
+        """Test pricing output matches the frontend pricing schema."""
+        response = pricing_routes.build_pricing_response(
+            {
+                "comparison": {
+                    "aiDraftEstimate": 485000,
+                    "estimatorFinalPrice": None,
+                    "variance": None,
+                },
+                "aiDraftEstimateBreakdown": [
+                    {
+                        "division": "01",
+                        "name": "General Requirements",
+                        "amount": 72750,
+                        "editable": True,
+                    }
+                ],
+                "additionalCostItems": [
+                    {
+                        "name": "Performance Bond",
+                        "description": "5% of contract value",
+                        "amount": 24250,
+                        "editable": True,
+                    },
+                    {
+                        "name": "Builder Risk Insurance",
+                        "description": "Project-specific insurance coverage",
+                        "amount": 5000,
+                        "editable": True,
+                    },
+                    {
+                        "name": "Coordination Costs",
+                        "description": "Site meetings, scheduling, RFIs",
+                        "amount": 15000,
+                        "editable": True,
+                    },
+                    {
+                        "name": "Contingency (5%)",
+                        "description": "Risk buffer",
+                        "amount": 24250,
+                        "editable": True,
+                    }
+                ],
+                "missingInformation": [
+                    {
+                        "title": "Supplier quotes missing",
+                        "description": (
+                            "Door hardware and window frame pricing not "
+                            "confirmed with suppliers"
+                        ),
+                        "severity": "critical",
+                    }
+                ],
+                "pricingBasisAndReasoning": [
+                    {
+                        "title": "Bonds",
+                        "description": (
+                            "Performance bond calculated as 5% of contract value"
+                        ),
+                    },
+                    {
+                        "title": "Insurance",
+                        "description": "Builder risk insurance requirement was identified",
+                    },
+                    {
+                        "title": "Coordination",
+                        "description": "Site meetings, scheduling, and RFIs require coordination time",
+                    },
+                    {
+                        "title": "Contingency",
+                        "description": (
+                            "5% applied due to limited site access and material "
+                            "approval lead times"
+                        ),
+                    }
+                ],
+            }
+        )
+
+        assert response.model_dump() == {
+            "comparison": {
+                "aiDraftEstimate": 485000,
+                "estimatorFinalPrice": None,
+                "variance": None,
+            },
+            "aiDraftEstimateBreakdown": [
+                {
+                    "division": "01",
+                    "name": "General Requirements",
+                    "amount": 72750,
+                    "editable": True,
+                }
+            ],
+            "additionalCostItems": [
+                {
+                    "name": "Bonds",
+                    "description": "5% of contract value",
+                    "amount": 24250,
+                    "editable": True,
+                },
+                {
+                    "name": "Insurance",
+                    "description": "Project-specific insurance coverage",
+                    "amount": 5000,
+                    "editable": True,
+                },
+                {
+                    "name": "Coordination",
+                    "description": "Site meetings, scheduling, RFIs",
+                    "amount": 15000,
+                    "editable": True,
+                },
+                {
+                    "name": "Contingency",
+                    "description": "Risk buffer",
+                    "amount": 24250,
+                    "editable": True,
+                }
+            ],
+            "missingInformation": [
+                {
+                    "title": "Supplier quotes missing",
+                    "description": (
+                        "Door hardware and window frame pricing not "
+                        "confirmed with suppliers"
+                    ),
+                    "severity": "critical",
+                }
+            ],
+            "pricingBasisAndReasoning": [
+                {
+                    "title": "Bonds",
+                    "description": (
+                        "Performance bond calculated as 5% of contract value"
+                    ),
+                },
+                {
+                    "title": "Insurance",
+                    "description": "Builder risk insurance requirement was identified",
+                },
+                {
+                    "title": "Coordination",
+                    "description": "Site meetings, scheduling, and RFIs require coordination time",
+                },
+                {
+                    "title": "Contingency",
+                    "description": (
+                        "5% applied due to limited site access and material "
+                        "approval lead times"
+                    ),
+                }
+            ],
+        }
+
+    def test_build_pricing_response_forces_fixed_additional_cost_categories(self):
+        response = pricing_routes.build_pricing_response(
+            {
+                "comparison": {},
+                "aiDraftEstimateBreakdown": [],
+                "additionalCostItems": [
+                    {
+                        "name": "Night Work Premium",
+                        "description": "18% labor cost increase",
+                        "amount": 32400,
+                    }
+                ],
+                "missingInformation": [],
+                "pricingBasisAndReasoning": [
+                    {
+                        "title": "Division Pricing",
+                        "description": "Based on extracted quantities.",
+                    }
+                ],
+            }
+        )
+
+        data = response.model_dump()
+
+        assert [item["name"] for item in data["additionalCostItems"]] == [
+            "Bonds",
+            "Insurance",
+            "Coordination",
+            "Contingency",
+        ]
+        assert all(
+            item["amount"] is None
+            for item in data["additionalCostItems"]
+        )
+        assert [item["title"] for item in data["pricingBasisAndReasoning"]] == [
+            "Bonds",
+            "Insurance",
+            "Coordination",
+            "Contingency",
+        ]
+
+
+class TestAnalysisRules:
+    """User-level AI analysis rule tests."""
+
+    def test_analysis_rules_route_updates_optional_rules(self, client):
+        response = client.patch(
+            "/analysis_rules",
+            json={
+                "user_id": TEST_USER_ID,
+                "general_instructions": "Use conservative estimating language.",
+                "scope_analysis_instructions": "Prioritize base bid scope.",
+                "assumptions_instructions": "Flag owner-provided items.",
+                "exclusions_instructions": "Exclude unsupported alternates.",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["user_id"] == TEST_USER_ID
+        assert data["pricing_specific_instructions"] == ""
+        assert data["scope_analysis_instructions"] == "Prioritize base bid scope."
+        assert data["saved_scope_instructions"] == (
+            "General analysis rules:\n"
+            "Use conservative estimating language.\n\n"
+            "Scope analysis rules:\n"
+            "Prioritize base bid scope."
+        )
+        assert data["saved_assumptions_instructions"] == (
+            "General analysis rules:\n"
+            "Use conservative estimating language.\n\n"
+            "Assumptions rules:\n"
+            "Flag owner-provided items."
+        )
+        assert data["saved_exclusions_instructions"] == (
+            "General analysis rules:\n"
+            "Use conservative estimating language.\n\n"
+            "Exclusions rules:\n"
+            "Exclude unsupported alternates."
+        )
+
+    def test_saved_scope_inputs_include_analysis_rules(self, setup_db):
+        db = TestingSessionLocal()
+        try:
+            db.add(
+                Document(
+                    filename="spec.txt",
+                    file_path="spec.txt",
+                    file_type="txt",
+                    project_id=TEST_PROJECT_ID,
+                    user_id=TEST_USER_ID,
+                    divisions='["06"]',
+                    instructions="Uploaded project instruction.",
+                )
+            )
+            db.add(
+                AnalysisRules(
+                    user_id=TEST_USER_ID,
+                    general_instructions="Apply user-level rules.",
+                    scope_analysis_instructions="Use scope-specific rule.",
+                )
+            )
+            db.commit()
+
+            divisions, instructions = scope_routes.get_saved_scope_inputs(
+                db=db,
+                user_id=TEST_USER_ID,
+                project_id=TEST_PROJECT_ID,
+            )
+        finally:
+            db.close()
+
+        assert divisions == ["06"]
+        assert instructions == (
+            "Uploaded project instruction.\n\n"
+            "General analysis rules:\n"
+            "Apply user-level rules.\n\n"
+            "Scope analysis rules:\n"
+            "Use scope-specific rule."
+        )
 
 
 class TestSummary:
@@ -502,6 +1071,173 @@ class TestSummary:
 
         assert response.status_code == 400
         assert response.json()["detail"] == "At least one valid division code must be selected"
+
+
+class TestAdmin:
+    """Admin route tests."""
+
+    def test_admin_users_returns_user_project_rows_without_input(self, client):
+        db = TestingSessionLocal()
+        try:
+            db.add_all(
+                [
+                    Document(
+                        filename="spec.txt",
+                        file_path="spec.txt",
+                        file_type="txt",
+                        project_id=TEST_PROJECT_ID,
+                        user_id=TEST_USER_ID,
+                        project_name=TEST_PROJECT_NAME,
+                        total_chunks=2,
+                    ),
+                    Document(
+                        filename="office.txt",
+                        file_path="office.txt",
+                        file_type="txt",
+                        project_id="project-789",
+                        user_id="user-999",
+                        project_name="Office Fitout",
+                        total_chunks=1,
+                    ),
+                ]
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        response = client.get("/admin/users")
+
+        assert response.status_code == 200
+        assert response.json() == [
+            {
+                "user_id": TEST_USER_ID,
+                "project_id": TEST_PROJECT_ID,
+                "project_name": TEST_PROJECT_NAME,
+            },
+            {
+                "user_id": "user-999",
+                "project_id": "project-789",
+                "project_name": "Office Fitout",
+            },
+        ]
+
+    def test_admin_users_coerces_numeric_ids_to_strings(self, client):
+        db = TestingSessionLocal()
+        try:
+            db.add(
+                Document(
+                    filename="numeric-ids.txt",
+                    file_path="numeric-ids.txt",
+                    file_type="txt",
+                    project_id=1,
+                    user_id=1,
+                    project_name=100,
+                    total_chunks=1,
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        response = client.get("/admin/users")
+
+        assert response.status_code == 200
+        assert response.json() == [
+            {
+                "user_id": "1",
+                "project_id": "1",
+                "project_name": "100",
+            }
+        ]
+
+        logs_response = client.get("/admin/ai-logs")
+
+        assert logs_response.status_code == 200
+        log = logs_response.json()[0]
+        assert log["project_name"] == "100"
+        assert log["details"]["project"] == {
+            "user_id": "1",
+            "user_owner": "1",
+            "project_id": "1",
+            "project_name": "100",
+        }
+
+    def test_admin_ai_logs_returns_table_and_nested_detail_shape(self, client):
+        db = TestingSessionLocal()
+        try:
+            db.add(
+                Document(
+                    filename="Door Schedule Addendum-4582.pdf",
+                    file_path="door-schedule.pdf",
+                    file_type="pdf",
+                    project_id=TEST_PROJECT_ID,
+                    user_id=TEST_USER_ID,
+                    project_name=TEST_PROJECT_NAME,
+                    divisions='["08", "09"]',
+                    instructions="Extract all door specifications and pricing information",
+                    file_size=2048,
+                    page_count=12,
+                    total_chunks=3,
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        response = client.get("/admin/ai-logs")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+
+        log = data[0]
+        assert set(log.keys()) == {
+            "file_name",
+            "project_name",
+            "stage",
+            "status",
+            "error_message",
+            "timestamp",
+            "duration",
+            "actions",
+            "details",
+        }
+        assert log["file_name"] == "Door Schedule Addendum-4582.pdf"
+        assert log["project_name"] == TEST_PROJECT_NAME
+        assert log["stage"] == "Extraction"
+        assert log["status"] == "Success"
+        assert log["error_message"] is None
+        assert log["duration"] == "3s"
+        assert log["actions"] == {
+            "view": True,
+            "retry": False,
+            "review_and_fix": False,
+        }
+        assert log["details"]["document"] == {
+            "file_name": "Door Schedule Addendum-4582.pdf",
+            "document_id": "DOC-1",
+            "file_type": "pdf",
+            "source_type": "document",
+        }
+        assert log["details"]["project"] == {
+            "user_id": TEST_USER_ID,
+            "user_owner": TEST_USER_ID,
+            "project_id": TEST_PROJECT_ID,
+            "project_name": TEST_PROJECT_NAME,
+        }
+        assert log["details"]["processing"] == {
+            "stage": "Extraction",
+            "status": "Success",
+            "error_message": None,
+            "divisions_selected": ["08", "09"],
+            "instructions_given": "Extract all door specifications and pricing information",
+        }
+        assert log["details"]["output"] == {
+            "output_version": "v2",
+            "total_chunks": 3,
+            "page_count": 12,
+            "file_size": 2048,
+        }
 
 
 if __name__ == "__main__":

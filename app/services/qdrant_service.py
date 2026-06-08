@@ -82,6 +82,8 @@ class QdrantService:
                       - project_id: Project ID
                       - document_id: Document ID
                       - filename: Original filename
+                      - page_no: One-based page number when available
+                      - page_number: One-based page number when available
                       - chunk_index: Index of chunk
                       - text: Text content
         
